@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "target": "ES2022",
+    "isolatedModules": true,
+    "noEmit": false
+  },
+  "include": [
+    "../libraries/nestjs-libraries/src/agent/codex-content.service.ts",
+    "../libraries/nestjs-libraries/src/agent/codex-content.service.spec.ts"
+  ]
+}

@@ -5,6 +5,7 @@ dist
 tmp
 /out-tsc
 .env
+.env.codex-local
 .apple
 # dependencies
 node_modules

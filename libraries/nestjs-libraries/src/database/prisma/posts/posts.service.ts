@@ -54,6 +54,7 @@ import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import { stripHtmlValidation } from '@gitroom/helpers/utils/strip.html.validation';
 import { weightedLength } from '@gitroom/helpers/utils/count.length';
+import { fallbackDateWithoutPostingTimes } from '@gitroom/nestjs-libraries/database/prisma/posts/posts.schedule';
 
 type PostWithConditionals = Post & {
   integration?: Integration;
@@ -1290,6 +1291,9 @@ export class PostsService {
       orgId,
       integrationId
     );
+    const fallbackDate = fallbackDateWithoutPostingTimes(findTimes);
+    if (fallbackDate) return fallbackDate;
+
     return this.findFreeDateTimeRecursive(
       orgId,
       findTimes,

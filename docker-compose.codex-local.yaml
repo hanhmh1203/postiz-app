@@ -1,0 +1,36 @@
+services:
+  postiz:
+    image: postiz-codex-local:3cbe20b
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./var/docker/nginx.conf:/etc/nginx/nginx.conf:ro
+    environment:
+      MAIN_URL: ${MAIN_URL}
+      FRONTEND_URL: ${FRONTEND_URL}
+      NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      NOT_SECURED: ${NOT_SECURED:-true}
+      AI_PROVIDER: ${AI_PROVIDER:-codex}
+      CODEX_BRIDGE_URL: ${CODEX_BRIDGE_URL:-http://host.docker.internal:4111}
+      CODEX_BRIDGE_TOKEN: ${CODEX_BRIDGE_TOKEN}
+      CODEX_BRIDGE_REQUEST_TIMEOUT_MS: ${CODEX_BRIDGE_REQUEST_TIMEOUT_MS:-260000}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      FACEBOOK_APP_ID: ${FACEBOOK_APP_ID:-}
+      FACEBOOK_APP_SECRET: ${FACEBOOK_APP_SECRET:-}
+      THREADS_APP_ID: ${THREADS_APP_ID:-}
+      THREADS_APP_SECRET: ${THREADS_APP_SECRET:-}
+    ports: !override
+      - '127.0.0.1:4007:5000'
+
+  temporal:
+    ports: !override
+      - '127.0.0.1:7233:7233'
+
+  temporal-ui:
+    ports: !override
+      - '127.0.0.1:8080:8080'
+
+  spotlight:
+    profiles: ['debug']
