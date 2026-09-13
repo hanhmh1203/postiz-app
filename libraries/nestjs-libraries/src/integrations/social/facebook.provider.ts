@@ -22,6 +22,9 @@ import { Integration } from '@prisma/client';
 import { hasExtension } from '@gitroom/helpers/utils/has.extension';
 import { timer } from '@gitroom/helpers/utils/timer';
 import { Rules } from '@gitroom/nestjs-libraries/chat/rules.description.decorator';
+import FormDataUpload from 'form-data';
+import { lookup } from 'mime-types';
+import path from 'path';
 
 export const META_GRAPH_API_VERSION = 'v25.0';
 
@@ -46,6 +49,86 @@ export class FacebookProvider extends SocialAbstract implements SocialProvider {
     return 63206;
   }
   dto = FacebookDto;
+
+  private localUploadPath(mediaPath: string): string | undefined {
+    if (
+      process.env.STORAGE_PROVIDER !== 'local' ||
+      !process.env.FRONTEND_URL ||
+      !process.env.UPLOAD_DIRECTORY
+    ) {
+      return undefined;
+    }
+
+    try {
+      const mediaUrl = new URL(mediaPath);
+      const frontendUrl = new URL(process.env.FRONTEND_URL);
+      if (
+        mediaUrl.origin !== frontendUrl.origin ||
+        !mediaUrl.pathname.startsWith('/uploads/')
+      ) {
+        return undefined;
+      }
+
+      const uploadRoot = path.resolve(process.env.UPLOAD_DIRECTORY);
+      const filePath = path.resolve(
+        uploadRoot,
+        decodeURIComponent(mediaUrl.pathname.slice('/uploads/'.length))
+      );
+
+      return filePath.startsWith(uploadRoot + path.sep) ? filePath : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async uploadPhoto(
+    pageId: string,
+    accessToken: string,
+    mediaPath: string,
+    identifier: string
+  ): Promise<{ id: string }> {
+    const url = `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${pageId}/photos?access_token=${accessToken}`;
+    const localPath = this.localUploadPath(mediaPath);
+
+    if (!localPath) {
+      return (
+        await this.fetch(
+          url,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              url: mediaPath,
+              published: false,
+            }),
+          },
+          identifier
+        )
+      ).json() as Promise<{ id: string }>;
+    }
+
+    return this.runStreamedUpload(async () => {
+      const form = new FormDataUpload();
+      form.append('published', 'false');
+      form.append(
+        'source',
+        await this.mediaStream(localPath, this.identifier),
+        {
+          filename: path.basename(localPath),
+          contentType: lookup(localPath) || 'application/octet-stream',
+          knownLength: await this.mediaSize(localPath, this.identifier),
+        }
+      );
+
+      const { data } = await this.getSsrfSafeAxios().post(url, form, {
+        headers: form.getHeaders(),
+        maxBodyLength: Infinity,
+      });
+      return data;
+    }, identifier);
+  }
 
   override async checkValidity(
     [firstPost]: Array<ValidityMedia[]>,
@@ -117,7 +200,7 @@ export class FacebookProvider extends SocialAbstract implements SocialProvider {
       return {
         type: 'bad-body' as const,
         value: 'Invalid file',
-      }
+      };
     }
 
     if (body.indexOf('1404102') > -1) {
@@ -528,22 +611,12 @@ export class FacebookProvider extends SocialAbstract implements SocialProvider {
 
           items.push({ kind: 'video', mediaId: video_id });
         } else {
-          const { id: photoId } = await (
-            await this.fetch(
-              `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${id}/photos?access_token=${accessToken}`,
-              {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  url: media.path,
-                  published: false,
-                }),
-              },
-              'upload photo story'
-            )
-          ).json();
+          const { id: photoId } = await this.uploadPhoto(
+            id,
+            accessToken,
+            media.path,
+            'upload photo story'
+          );
 
           items.push({ kind: 'photo', mediaId: photoId });
         }
@@ -789,22 +862,12 @@ export class FacebookProvider extends SocialAbstract implements SocialProvider {
         ? []
         : await Promise.all(
             firstPost.media.map(async (media) => {
-              const { id: photoId } = await (
-                await this.fetch(
-                  `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${id}/photos?access_token=${accessToken}`,
-                  {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                      url: media.path,
-                      published: false,
-                    }),
-                  },
-                  'upload images slides'
-                )
-              ).json();
+              const { id: photoId } = await this.uploadPhoto(
+                id,
+                accessToken,
+                media.path,
+                'upload images slides'
+              );
 
               return { media_fbid: photoId };
             })
