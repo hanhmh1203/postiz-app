@@ -1,0 +1,215 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile, utimes, realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
+
+import {
+  classifyCandidate,
+  computeSourceChecksum,
+  discoverPortalCandidates,
+  isLongYoutubeUrl,
+  isPathInside,
+  loadState,
+  parseBatchArgs,
+  selectLatestReview,
+  writeRunArtifacts,
+} from './book-facebook-drafts-lib.mjs';
+
+async function makeTempDirectory() {
+  return realpath(await mkdtemp(path.join(tmpdir(), 'book-facebook-drafts-')));
+}
+
+function createPortalDatabase(databasePath, rows) {
+  const database = new DatabaseSync(databasePath);
+  database.exec(`
+    CREATE TABLE books (id TEXT PRIMARY KEY, title TEXT NOT NULL);
+    CREATE TABLE book_productions (
+      id TEXT PRIMARY KEY,
+      book_id TEXT NOT NULL,
+      workflow_dir TEXT NOT NULL,
+      status TEXT NOT NULL,
+      youtube_uploaded_at TEXT
+    );
+    CREATE TABLE publication_links (
+      id TEXT PRIMARY KEY,
+      book_id TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      channel_name TEXT,
+      url TEXT NOT NULL,
+      title TEXT,
+      published_at TEXT,
+      status TEXT NOT NULL
+    );
+  `);
+
+  const insertBook = database.prepare('INSERT INTO books (id,title) VALUES (?,?)');
+  const insertProduction = database.prepare(`
+    INSERT INTO book_productions
+      (id,book_id,workflow_dir,status,youtube_uploaded_at)
+    VALUES (?,?,?,?,?)
+  `);
+  const insertPublication = database.prepare(`
+    INSERT INTO publication_links
+      (id,book_id,platform,channel_name,url,title,published_at,status)
+    VALUES (?,?,?,?,?,?,?,?)
+  `);
+
+  for (const row of rows) {
+    insertBook.run(row.bookId, row.title);
+    insertProduction.run(
+      row.productionId,
+      row.bookId,
+      row.workflowDirectory,
+      row.productionStatus ?? 'youtube_uploaded',
+      row.youtubeUploadedAt
+    );
+    insertPublication.run(
+      `${row.bookId}-publication`,
+      row.bookId,
+      'youtube',
+      'Will Read Book',
+      row.videoUrl,
+      row.title,
+      row.youtubeUploadedAt,
+      'public'
+    );
+  }
+  database.close();
+}
+
+test('parses an absolute batch root and enforces a limit from 1 through 10', () => {
+  assert.deepEqual(parseBatchArgs(['/tmp/books', '--dry-run', '--limit', '4']), {
+    batchRoot: '/tmp/books',
+    dryRun: true,
+    limit: 4,
+  });
+  assert.throws(() => parseBatchArgs(['relative/books']), /absolute/i);
+  assert.throws(() => parseBatchArgs(['/tmp/books', '--limit', '0']), /1.*10/);
+  assert.throws(() => parseBatchArgs(['/tmp/books', '--limit', '11']), /1.*10/);
+  assert.throws(() => parseBatchArgs(['/tmp/books', '--unknown']), /unknown/i);
+});
+
+test('accepts long YouTube video URLs and rejects playlists and Shorts', () => {
+  assert.equal(isLongYoutubeUrl('https://www.youtube.com/watch?v=abc_123-Z'), true);
+  assert.equal(isLongYoutubeUrl('https://youtube.com/watch?v=abc_123-Z'), true);
+  assert.equal(isLongYoutubeUrl('https://youtu.be/abc_123-Z'), true);
+  assert.equal(isLongYoutubeUrl('https://www.youtube.com/shorts/abc_123-Z'), false);
+  assert.equal(isLongYoutubeUrl('https://www.youtube.com/playlist?list=PL123'), false);
+  assert.equal(isLongYoutubeUrl('http://youtu.be/abc123'), false);
+  assert.equal(isLongYoutubeUrl('not a url'), false);
+});
+
+test('recognizes only resolved paths inside the batch root', () => {
+  assert.equal(isPathInside('/tmp/books', '/tmp/books/one'), true);
+  assert.equal(isPathInside('/tmp/books', '/tmp/books'), true);
+  assert.equal(isPathInside('/tmp/books', '/tmp/books-other/one'), false);
+});
+
+test('selects the newest analysis Markdown and ignores profile and metadata files', async () => {
+  const directory = await makeTempDirectory();
+  const older = path.join(directory, 'older-phan-tich.md');
+  const newer = path.join(directory, 'newer-phan-tich.md');
+  await writeFile(older, 'older review');
+  await writeFile(newer, 'newer review');
+  await writeFile(path.join(directory, 'review_profile.md'), 'profile');
+  await writeFile(path.join(directory, 'youtube_metadata_long.md'), 'metadata');
+  await utimes(older, new Date('2026-01-01'), new Date('2026-01-01'));
+  await utimes(newer, new Date('2026-02-01'), new Date('2026-02-01'));
+
+  assert.equal(await selectLatestReview(directory), newer);
+});
+
+test('discovers uploaded books inside the root in oldest-first order', async () => {
+  const root = await makeTempDirectory();
+  const outside = await makeTempDirectory();
+  const older = path.join(root, 'older');
+  const newer = path.join(root, 'newer');
+  await Promise.all([mkdir(older), mkdir(newer)]);
+  const databasePath = path.join(root, 'library.sqlite3');
+
+  createPortalDatabase(databasePath, [
+    {
+      bookId: 'newer',
+      productionId: 'production-newer',
+      title: 'Newer valid book',
+      workflowDirectory: newer,
+      youtubeUploadedAt: '2026-02-01T00:00:00.000Z',
+      videoUrl: 'https://www.youtube.com/watch?v=newer123',
+    },
+    {
+      bookId: 'older',
+      productionId: 'production-older',
+      title: 'Older valid book',
+      workflowDirectory: older,
+      youtubeUploadedAt: '2026-01-01T00:00:00.000Z',
+      videoUrl: 'https://youtu.be/older123',
+    },
+    {
+      bookId: 'outside',
+      productionId: 'production-outside',
+      title: 'Outside book',
+      workflowDirectory: outside,
+      youtubeUploadedAt: '2025-01-01T00:00:00.000Z',
+      videoUrl: 'https://youtu.be/outside123',
+    },
+  ]);
+
+  const candidates = await discoverPortalCandidates({ databasePath, batchRoot: root });
+  assert.deepEqual(
+    candidates.map(({ title }) => title),
+    ['Older valid book', 'Newer valid book']
+  );
+});
+
+test('computes stable source checksums and classifies duplicate and changed sources', async () => {
+  const root = await makeTempDirectory();
+  const reviewPath = path.join(root, 'book-phan-tich.md');
+  const imagePath = path.join(root, 'land.png');
+  await writeFile(reviewPath, 'A grounded review');
+  await writeFile(imagePath, Buffer.from([1, 2, 3, 4]));
+  const candidate = {
+    bookId: 'book-1',
+    productionId: 'production-1',
+    reviewPath,
+    imagePath,
+    videoUrl: 'https://youtu.be/abc123',
+  };
+  const checksum = await computeSourceChecksum(
+    candidate,
+    'Vì cuộc sống là ko chờ đợi',
+    'v1'
+  );
+  assert.equal(checksum, await computeSourceChecksum(candidate, 'Vì cuộc sống là ko chờ đợi', 'v1'));
+  assert.equal(classifyCandidate(candidate, { entries: [] }, checksum), 'new');
+  assert.equal(
+    classifyCandidate(candidate, { entries: [{ bookId: 'book-1', checksum }] }, checksum),
+    'skipped'
+  );
+  assert.equal(
+    classifyCandidate(candidate, { entries: [{ bookId: 'book-1', checksum: 'older' }] }, checksum),
+    'source_changed'
+  );
+});
+
+test('loads missing state and atomically writes safe JSON and Markdown reports', async () => {
+  const outputDirectory = path.join(await makeTempDirectory(), 'outputs');
+  assert.deepEqual(await loadState(path.join(outputDirectory, 'state.json')), {
+    version: 1,
+    entries: [],
+  });
+
+  const paths = await writeRunArtifacts({
+    outputDirectory,
+    runId: '2026-09-13T12-00-00-000Z',
+    report: {
+      created: [{ bookId: 'book-1', title: 'Book One', draftId: 'draft-1' }],
+      skipped: [],
+      sourceChanged: [],
+      failed: [],
+    },
+  });
+  assert.match(paths.json, /2026-09-13T12-00-00-000Z\.json$/);
+  assert.match(paths.markdown, /2026-09-13T12-00-00-000Z\.md$/);
+});
