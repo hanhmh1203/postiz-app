@@ -6,6 +6,7 @@ tmp
 /out-tsc
 .env
 .env.codex-local
+.postiz-local-credentials
 .apple
 # dependencies
 node_modules
