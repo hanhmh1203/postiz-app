@@ -102,6 +102,41 @@ function isLongYoutubeVideoUrl(value) {
   }
 }
 
+function validateComment(comment) {
+  if (typeof comment !== 'string' || !comment.startsWith(COMMENT_PREFIX)) {
+    throw new Error('The first comment does not match the required template');
+  }
+  const videoUrl = comment.slice(COMMENT_PREFIX.length).trim();
+  if (!isLongYoutubeVideoUrl(videoUrl)) {
+    throw new Error('The first comment must contain a long YouTube video URL');
+  }
+  return comment;
+}
+
+function validateShortContent(content) {
+  if (typeof content !== 'string' || !content.trim()) {
+    throw new Error('Facebook Short content must not be empty');
+  }
+  const trimmed = content.trim();
+  if (/(?:https?:\/\/|www\.)/i.test(trimmed)) {
+    throw new Error('Facebook Short content must not contain a URL');
+  }
+  return trimmed;
+}
+
+function mediaMimeType(mediaPath) {
+  const extension = path.extname(mediaPath).toLowerCase();
+  const supported = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.mp4': 'video/mp4',
+  };
+  const mimeType = supported[extension];
+  if (!mimeType) throw new Error(`Unsupported media extension: ${extension || '(none)'}`);
+  return mimeType;
+}
+
 export class PostizLocalClient {
   constructor({ baseUrl, credentials, timeoutMs = 30_000, generationTimeoutMs = 280_000 }) {
     const normalizedBaseUrl = String(baseUrl).replace(/\/$/, '');
@@ -202,9 +237,13 @@ export class PostizLocalClient {
     }
   }
 
-  async uploadMedia(imagePath) {
+  async uploadMedia(mediaPath) {
     const form = new FormData();
-    form.append('file', new Blob([await readFile(imagePath)], { type: 'image/png' }), path.basename(imagePath));
+    form.append(
+      'file',
+      new Blob([await readFile(mediaPath)], { type: mediaMimeType(mediaPath) }),
+      path.basename(mediaPath)
+    );
     const response = await this.#fetch('/media/upload-simple', {
       method: 'POST',
       body: form,
@@ -223,13 +262,26 @@ export class PostizLocalClient {
 
   async createDraft({ integrationId, caption, comment, media, marker }) {
     const validCaption = validateFacebookCaption(caption);
-    if (!comment.startsWith(COMMENT_PREFIX)) {
-      throw new Error('The first comment does not match the required template');
-    }
-    const videoUrl = comment.slice(COMMENT_PREFIX.length).trim();
-    if (!isLongYoutubeVideoUrl(videoUrl)) {
-      throw new Error('The first comment must contain a long YouTube video URL');
-    }
+    return this.#createMediaDraft({
+      integrationId,
+      content: validCaption,
+      comment: validateComment(comment),
+      media,
+      marker,
+    });
+  }
+
+  async createShortDraft({ integrationId, content, comment, media, marker }) {
+    return this.#createMediaDraft({
+      integrationId,
+      content: validateShortContent(content),
+      comment: validateComment(comment),
+      media,
+      marker,
+    });
+  }
+
+  async #createMediaDraft({ integrationId, content, comment, media, marker }) {
     if (!media?.id || !media?.path) throw new Error('A saved Postiz media object is required');
     const ids = deterministicPostIds(marker);
     const payload = {
@@ -241,7 +293,7 @@ export class PostizLocalClient {
         {
           integration: { id: integrationId },
           value: [
-            { id: ids.rootId, content: validCaption, image: [{ id: media.id, path: media.path }] },
+            { id: ids.rootId, content, image: [{ id: media.id, path: media.path }] },
             { id: ids.commentId, content: comment, image: [] },
           ],
         },

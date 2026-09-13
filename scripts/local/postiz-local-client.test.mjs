@@ -310,6 +310,93 @@ test('uploads land.png and creates an idempotent draft with a first comment', as
   }
 });
 
+test('uploads an MP4 with its video MIME type', async () => {
+  let mediaContentType;
+  let mediaBody;
+  const server = await startServer(async (request, response) => {
+    if (request.url === '/api/auth/login') {
+      await requestBody(request);
+      response.setHeader('auth', 'jwt-value');
+      response.end('{}');
+      return;
+    }
+    if (request.url === '/api/media/upload-simple') {
+      mediaContentType = request.headers['content-type'];
+      mediaBody = (await requestBody(request)).toString('latin1');
+      response.end(JSON.stringify({ id: 'video-id', path: '/uploads/short_01.mp4' }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end();
+  });
+
+  const directory = await mkdtemp(path.join(tmpdir(), 'postiz-video-'));
+  const videoPath = path.join(directory, 'short_01.mp4');
+  await writeFile(videoPath, Buffer.from('fake-video-bytes'));
+  try {
+    const client = new PostizLocalClient({
+      baseUrl: server.baseUrl,
+      credentials: { email: 'a@b.com', password: 'secret' },
+    });
+    await client.login();
+    await client.uploadMedia(videoPath);
+
+    assert.match(mediaContentType, /^multipart\/form-data;/);
+    assert.match(mediaBody, /filename="short_01\.mp4"/);
+    assert.match(mediaBody, /Content-Type: video\/mp4/i);
+  } finally {
+    await server.close();
+  }
+});
+
+test('creates an idempotent video Short draft from approved metadata text', async () => {
+  let draft;
+  const server = await startServer(async (request, response) => {
+    if (request.url === '/api/auth/login') {
+      await requestBody(request);
+      response.setHeader('auth', 'jwt-value');
+      response.end('{}');
+      return;
+    }
+    if (request.url === '/api/posts') {
+      draft = JSON.parse((await requestBody(request)).toString());
+      response.end(JSON.stringify([{ postId: draft.posts[0].value[0].id, integration: 'page-id' }]));
+      return;
+    }
+    response.statusCode = 404;
+    response.end();
+  });
+
+  try {
+    const client = new PostizLocalClient({
+      baseUrl: server.baseUrl,
+      credentials: { email: 'a@b.com', password: 'secret' },
+    });
+    await client.login();
+    const marker = 'wrb:book-1:short:01:checksum';
+    const content = 'Một ý quan trọng từ cuốn sách.\n\n#Shorts #TomTatSach #WillReadBook';
+    const result = await client.createShortDraft({
+      integrationId: 'page-id',
+      content,
+      comment: 'Để nghe review trọn vẹn, bạn xem tại đây: https://youtu.be/abc123',
+      media: { id: 'video-id', path: '/uploads/short_01.mp4' },
+      marker,
+    });
+
+    const ids = deterministicPostIds(marker);
+    assert.equal(draft.type, 'draft');
+    assert.equal(draft.posts[0].value[0].id, ids.rootId);
+    assert.equal(draft.posts[0].value[0].content, content);
+    assert.deepEqual(draft.posts[0].value[0].image, [
+      { id: 'video-id', path: '/uploads/short_01.mp4' },
+    ]);
+    assert.equal(draft.posts[0].value[1].id, ids.commentId);
+    assert.equal(result.postId, ids.rootId);
+  } finally {
+    await server.close();
+  }
+});
+
 test('rejects draft creation when Postiz does not preserve the requested id', async () => {
   const server = await startServer(async (request, response) => {
     if (request.url === '/api/auth/login') {
