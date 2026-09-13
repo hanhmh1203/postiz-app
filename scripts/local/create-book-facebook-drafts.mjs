@@ -16,7 +16,10 @@ import {
   writeRunArtifacts,
   writeState,
 } from './book-facebook-drafts-lib.mjs';
-import { PostizLocalClient, readPostizCredentials } from './postiz-local-client.mjs';
+import {
+  PostizLocalClient,
+  readPostizCredentials,
+} from './postiz-local-client.mjs';
 
 export const TEMPLATE_VERSION = 'book-facebook-v1';
 export const SHORT_TEMPLATE_VERSION = 'book-facebook-short-v1';
@@ -25,7 +28,12 @@ const COMMENT_PREFIX = 'Để nghe review trọn vẹn, bạn xem tại đây: '
 
 export async function retryTransient(
   operation,
-  { retries = 2, delayMs = 250, wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)) } = {}
+  {
+    retries = 2,
+    delayMs = 250,
+    wait = (milliseconds) =>
+      new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  } = {}
 ) {
   let lastError;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
@@ -41,7 +49,8 @@ export async function retryTransient(
 }
 
 function safeErrorCode(error) {
-  const code = typeof error?.code === 'string' ? error.code : 'unexpected_error';
+  const code =
+    typeof error?.code === 'string' ? error.code : 'unexpected_error';
   return /^[a-z0-9_]+$/.test(code) ? code : 'unexpected_error';
 }
 
@@ -51,7 +60,8 @@ async function validateReviewResources(candidate) {
   const imagePath = path.join(candidate.workflowDirectory, 'land.png');
   try {
     const image = await stat(imagePath);
-    if (!image.isFile() || image.size === 0) return { reason: 'land_image_missing' };
+    if (!image.isFile() || image.size === 0)
+      return { reason: 'land_image_missing' };
   } catch {
     return { reason: 'land_image_missing' };
   }
@@ -135,7 +145,11 @@ export async function runBookFacebookDraftBatch({
         });
       } else {
         const candidate = { ...rawCandidate, ...resources, variant: 'review' };
-        const checksum = await computeSourceChecksum(candidate, pageName, TEMPLATE_VERSION);
+        const checksum = await computeSourceChecksum(
+          candidate,
+          pageName,
+          TEMPLATE_VERSION
+        );
         const classification = classifyCandidate(candidate, state, checksum, {
           variant: 'review',
         });
@@ -155,7 +169,11 @@ export async function runBookFacebookDraftBatch({
           });
         } else {
           const caption = await retryTransient(
-            () => client.generateCaption({ title: candidate.title, review: candidate.review }),
+            () =>
+              client.generateCaption({
+                title: candidate.title,
+                review: candidate.review,
+              }),
             { retries: 2, delayMs: retryDelayMs }
           );
           const comment = `${COMMENT_PREFIX}${candidate.videoUrl}`;
@@ -178,10 +196,13 @@ export async function runBookFacebookDraftBatch({
               previewPath,
             });
           } else {
-            const media = await retryTransient(() => client.uploadMedia(candidate.imagePath), {
-              retries: 2,
-              delayMs: retryDelayMs,
-            });
+            const media = await retryTransient(
+              () => client.uploadMedia(candidate.imagePath),
+              {
+                retries: 2,
+                delayMs: retryDelayMs,
+              }
+            );
             let draft;
             try {
               draft = await retryTransient(
@@ -197,7 +218,9 @@ export async function runBookFacebookDraftBatch({
                 { retries: 2, delayMs: retryDelayMs }
               );
             } catch (error) {
-              const existing = await client.findDraftByMarker(marker).catch(() => null);
+              const existing = await client
+                .findDraftByMarker(marker)
+                .catch(() => null);
               if (!existing) throw error;
               draft = existing;
             }
@@ -267,10 +290,15 @@ export async function runBookFacebookDraftBatch({
           pageName,
           SHORT_TEMPLATE_VERSION
         );
-        const classification = classifyCandidate(rawCandidate, state, checksum, {
-          variant: 'short',
-          shortName: short.shortName,
-        });
+        const classification = classifyCandidate(
+          rawCandidate,
+          state,
+          checksum,
+          {
+            variant: 'short',
+            shortName: short.shortName,
+          }
+        );
         if (classification === 'skipped') {
           report.skipped.push({
             ...candidate,
@@ -311,10 +339,13 @@ export async function runBookFacebookDraftBatch({
             previewPath,
           });
         } else {
-          const media = await retryTransient(() => client.uploadMedia(short.videoPath), {
-            retries: 2,
-            delayMs: retryDelayMs,
-          });
+          const media = await retryTransient(
+            () => client.uploadMedia(short.videoPath),
+            {
+              retries: 2,
+              delayMs: retryDelayMs,
+            }
+          );
           let draft;
           try {
             draft = await retryTransient(
@@ -330,7 +361,9 @@ export async function runBookFacebookDraftBatch({
               { retries: 2, delayMs: retryDelayMs }
             );
           } catch (error) {
-            const existing = await client.findDraftByMarker(marker).catch(() => null);
+            const existing = await client
+              .findDraftByMarker(marker)
+              .catch(() => null);
             if (!existing) throw error;
             draft = existing;
           }
@@ -377,7 +410,11 @@ export async function runBookFacebookDraftBatch({
   }
 
   if (!dryRun) await writeState(statePath, state);
-  const reportPaths = await writeRunArtifacts({ outputDirectory, runId, report });
+  const reportPaths = await writeRunArtifacts({
+    outputDirectory,
+    runId,
+    report,
+  });
   return { ...report, reportPaths };
 }
 
@@ -385,9 +422,11 @@ async function main() {
   const args = parseBatchArgs(process.argv.slice(2));
   const databasePath = process.env.BOOK_LIBRARY_DATABASE;
   const outputDirectory = process.env.BOOK_FACEBOOK_DRAFT_OUTPUT;
-  const credentialPath = process.env.POSTIZ_CREDENTIAL_FILE || '.postiz-local-credentials';
+  const credentialPath =
+    process.env.POSTIZ_CREDENTIAL_FILE || '.postiz-local-credentials';
   if (!databasePath) throw new Error('BOOK_LIBRARY_DATABASE is required');
-  if (!outputDirectory) throw new Error('BOOK_FACEBOOK_DRAFT_OUTPUT is required');
+  if (!outputDirectory)
+    throw new Error('BOOK_FACEBOOK_DRAFT_OUTPUT is required');
   const credentials = await readPostizCredentials(path.resolve(credentialPath));
   const client = new PostizLocalClient({
     baseUrl: process.env.POSTIZ_URL || 'http://localhost:4007',
@@ -402,19 +441,30 @@ async function main() {
     dryRun: args.dryRun,
     client,
   });
-  process.stdout.write(`${JSON.stringify({
-    created: report.created.length,
-    skipped: report.skipped.length,
-    sourceChanged: report.sourceChanged.length,
-    failed: report.failed.length,
-    reports: report.reportPaths,
-  }, null, 2)}\n`);
+  process.stdout.write(
+    `${JSON.stringify(
+      {
+        created: report.created.length,
+        skipped: report.skipped.length,
+        sourceChanged: report.sourceChanged.length,
+        failed: report.failed.length,
+        reports: report.reportPaths,
+      },
+      null,
+      2
+    )}\n`
+  );
   if (report.failed.length) process.exitCode = 2;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   main().catch((error) => {
-    process.stderr.write(`Book Facebook draft batch failed: ${safeErrorCode(error)}\n`);
+    process.stderr.write(
+      `Book Facebook draft batch failed: ${safeErrorCode(error)}\n`
+    );
     process.exitCode = 1;
   });
 }

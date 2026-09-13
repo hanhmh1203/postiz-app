@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, writeFile, utimes, realpath } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  writeFile,
+  utimes,
+  realpath,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -48,7 +55,9 @@ function createPortalDatabase(databasePath, rows) {
     );
   `);
 
-  const insertBook = database.prepare('INSERT INTO books (id,title) VALUES (?,?)');
+  const insertBook = database.prepare(
+    'INSERT INTO books (id,title) VALUES (?,?)'
+  );
   const insertProduction = database.prepare(`
     INSERT INTO book_productions
       (id,book_id,workflow_dir,status,youtube_uploaded_at)
@@ -84,11 +93,14 @@ function createPortalDatabase(databasePath, rows) {
 }
 
 test('parses an absolute batch root and enforces a limit from 1 through 10', () => {
-  assert.deepEqual(parseBatchArgs(['/tmp/books', '--dry-run', '--limit', '4']), {
-    batchRoot: '/tmp/books',
-    dryRun: true,
-    limit: 4,
-  });
+  assert.deepEqual(
+    parseBatchArgs(['/tmp/books', '--dry-run', '--limit', '4']),
+    {
+      batchRoot: '/tmp/books',
+      dryRun: true,
+      limit: 4,
+    }
+  );
   assert.throws(() => parseBatchArgs(['relative/books']), /absolute/i);
   assert.throws(() => parseBatchArgs(['/tmp/books', '--limit', '0']), /1.*10/);
   assert.throws(() => parseBatchArgs(['/tmp/books', '--limit', '11']), /1.*10/);
@@ -96,11 +108,20 @@ test('parses an absolute batch root and enforces a limit from 1 through 10', () 
 });
 
 test('accepts long YouTube video URLs and rejects playlists and Shorts', () => {
-  assert.equal(isLongYoutubeUrl('https://www.youtube.com/watch?v=abc_123-Z'), true);
+  assert.equal(
+    isLongYoutubeUrl('https://www.youtube.com/watch?v=abc_123-Z'),
+    true
+  );
   assert.equal(isLongYoutubeUrl('https://youtube.com/watch?v=abc_123-Z'), true);
   assert.equal(isLongYoutubeUrl('https://youtu.be/abc_123-Z'), true);
-  assert.equal(isLongYoutubeUrl('https://www.youtube.com/shorts/abc_123-Z'), false);
-  assert.equal(isLongYoutubeUrl('https://www.youtube.com/playlist?list=PL123'), false);
+  assert.equal(
+    isLongYoutubeUrl('https://www.youtube.com/shorts/abc_123-Z'),
+    false
+  );
+  assert.equal(
+    isLongYoutubeUrl('https://www.youtube.com/playlist?list=PL123'),
+    false
+  );
   assert.equal(isLongYoutubeUrl('http://youtu.be/abc123'), false);
   assert.equal(isLongYoutubeUrl('not a url'), false);
 });
@@ -156,18 +177,38 @@ test('discovers every optional Short and isolates missing video or metadata', as
       'Có description nhưng thiếu hashtag.',
     ].join('\n')
   );
-  const readyDirectory = path.join(directory, 'output', 'shorts', 'short_01_ready');
+  const readyDirectory = path.join(
+    directory,
+    'output',
+    'shorts',
+    'short_01_ready'
+  );
   await mkdir(readyDirectory, { recursive: true });
-  await writeFile(path.join(readyDirectory, 'short_01_ready.mp4'), Buffer.from('video-bytes'));
+  await writeFile(
+    path.join(readyDirectory, 'short_01_ready.mp4'),
+    Buffer.from('video-bytes')
+  );
 
   const shorts = await discoverShortResources(directory);
 
   assert.deepEqual(
-    shorts.map(({ shortName, shortNumber, status }) => ({ shortName, shortNumber, status })),
+    shorts.map(({ shortName, shortNumber, status }) => ({
+      shortName,
+      shortNumber,
+      status,
+    })),
     [
       { shortName: 'short_01_ready', shortNumber: '01', status: 'ready' },
-      { shortName: 'short_02_no_video', shortNumber: '02', status: 'video_missing' },
-      { shortName: 'short_03_no_metadata', shortNumber: '03', status: 'metadata_missing' },
+      {
+        shortName: 'short_02_no_video',
+        shortNumber: '02',
+        status: 'video_missing',
+      },
+      {
+        shortName: 'short_03_no_metadata',
+        shortNumber: '03',
+        status: 'metadata_missing',
+      },
     ]
   );
   assert.equal(shorts[0].description, 'Mô tả Short đã duyệt.');
@@ -176,7 +217,10 @@ test('discovers every optional Short and isolates missing video or metadata', as
     formatFacebookHashtags('Shorts, Tom Tat Sach, #WillReadBook'),
     '#Shorts #TomTatSach #WillReadBook'
   );
-  assert.deepEqual(await discoverShortResources(path.join(directory, 'missing-book')), []);
+  assert.deepEqual(
+    await discoverShortResources(path.join(directory, 'missing-book')),
+    []
+  );
 });
 
 test('discovers uploaded books inside the root in oldest-first order', async () => {
@@ -214,7 +258,10 @@ test('discovers uploaded books inside the root in oldest-first order', async () 
     },
   ]);
 
-  const candidates = await discoverPortalCandidates({ databasePath, batchRoot: root });
+  const candidates = await discoverPortalCandidates({
+    databasePath,
+    batchRoot: root,
+  });
   assert.deepEqual(
     candidates.map(({ title }) => title),
     ['Older valid book', 'Newer valid book']
@@ -238,7 +285,10 @@ test('remaps a stale portal workflow path to one exact title slug inside the bat
     },
   ]);
 
-  const candidates = await discoverPortalCandidates({ databasePath, batchRoot: root });
+  const candidates = await discoverPortalCandidates({
+    databasePath,
+    batchRoot: root,
+  });
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0].workflowDirectory, await realpath(mapped));
 });
@@ -260,7 +310,10 @@ test('remaps a title slug to a unique resource directory with an author suffix',
     },
   ]);
 
-  const candidates = await discoverPortalCandidates({ databasePath, batchRoot: root });
+  const candidates = await discoverPortalCandidates({
+    databasePath,
+    batchRoot: root,
+  });
   assert.equal(candidates[0]?.workflowDirectory, await realpath(mapped));
 });
 
@@ -275,13 +328,17 @@ test('remaps a verbose stale workflow slug to one shorter resource directory', a
       bookId: 'book-1',
       productionId: 'production-1',
       title: 'Một tiêu đề portal không đồng nhất',
-      workflowDirectory: '/old-machine/books/chu-nghia-khac-ky-phong-cach-song-ban-linh',
+      workflowDirectory:
+        '/old-machine/books/chu-nghia-khac-ky-phong-cach-song-ban-linh',
       youtubeUploadedAt: '2026-01-01T00:00:00.000Z',
       videoUrl: 'https://www.youtube.com/watch?v=abc123',
     },
   ]);
 
-  const candidates = await discoverPortalCandidates({ databasePath, batchRoot: root });
+  const candidates = await discoverPortalCandidates({
+    databasePath,
+    batchRoot: root,
+  });
   assert.equal(candidates[0]?.workflowDirectory, await realpath(mapped));
 });
 
@@ -304,7 +361,10 @@ test('does not guess when a title slug maps to more than one resource directory'
     },
   ]);
 
-  assert.deepEqual(await discoverPortalCandidates({ databasePath, batchRoot: root }), []);
+  assert.deepEqual(
+    await discoverPortalCandidates({ databasePath, batchRoot: root }),
+    []
+  );
 });
 
 test('uses a remapped resource directory for only one portal production', async () => {
@@ -330,8 +390,14 @@ test('uses a remapped resource directory for only one portal production', async 
     },
   ]);
 
-  const candidates = await discoverPortalCandidates({ databasePath, batchRoot: root });
-  assert.deepEqual(candidates.map(({ productionId }) => productionId), ['older-production']);
+  const candidates = await discoverPortalCandidates({
+    databasePath,
+    batchRoot: root,
+  });
+  assert.deepEqual(
+    candidates.map(({ productionId }) => productionId),
+    ['older-production']
+  );
 });
 
 test('computes stable source checksums and classifies duplicate and changed sources', async () => {
@@ -352,14 +418,25 @@ test('computes stable source checksums and classifies duplicate and changed sour
     'Vì cuộc sống là ko chờ đợi',
     'v1'
   );
-  assert.equal(checksum, await computeSourceChecksum(candidate, 'Vì cuộc sống là ko chờ đợi', 'v1'));
+  assert.equal(
+    checksum,
+    await computeSourceChecksum(candidate, 'Vì cuộc sống là ko chờ đợi', 'v1')
+  );
   assert.equal(classifyCandidate(candidate, { entries: [] }, checksum), 'new');
   assert.equal(
-    classifyCandidate(candidate, { entries: [{ bookId: 'book-1', checksum }] }, checksum),
+    classifyCandidate(
+      candidate,
+      { entries: [{ bookId: 'book-1', checksum }] },
+      checksum
+    ),
     'skipped'
   );
   assert.equal(
-    classifyCandidate(candidate, { entries: [{ bookId: 'book-1', checksum: 'older' }] }, checksum),
+    classifyCandidate(
+      candidate,
+      { entries: [{ bookId: 'book-1', checksum: 'older' }] },
+      checksum
+    ),
     'source_changed'
   );
 });
@@ -380,11 +457,21 @@ test('classifies review and Short state independently and hashes Short content',
     description: 'Mô tả Short',
     hashtags: '#Shorts #WillReadBook',
   };
-  const checksum = await computeShortChecksum(candidate, short, PAGE_NAME, 'short-v1');
-  assert.equal(checksum, await computeShortChecksum(candidate, short, PAGE_NAME, 'short-v1'));
+  const checksum = await computeShortChecksum(
+    candidate,
+    short,
+    PAGE_NAME,
+    'short-v1'
+  );
+  assert.equal(
+    checksum,
+    await computeShortChecksum(candidate, short, PAGE_NAME, 'short-v1')
+  );
 
   const reviewState = {
-    entries: [{ bookId: 'book-1', variant: 'review', checksum: 'review-checksum' }],
+    entries: [
+      { bookId: 'book-1', variant: 'review', checksum: 'review-checksum' },
+    ],
   };
   assert.equal(
     classifyCandidate(candidate, reviewState, checksum, {
@@ -424,7 +511,10 @@ test('migrates version 1 review entries to version 2 state', async () => {
   const statePath = path.join(directory, 'state.json');
   await writeFile(
     statePath,
-    JSON.stringify({ version: 1, entries: [{ bookId: 'book-1', checksum: 'checksum-1' }] })
+    JSON.stringify({
+      version: 1,
+      entries: [{ bookId: 'book-1', checksum: 'checksum-1' }],
+    })
   );
 
   assert.deepEqual(await loadState(statePath), {
@@ -466,7 +556,10 @@ test('ships one Bash wrapper that rejects relative batch paths', () => {
 });
 
 test('documents non-secret batch settings and exposes package scripts', async () => {
-  const example = await readFile(path.resolve('.env.codex-local.example'), 'utf8');
+  const example = await readFile(
+    path.resolve('.env.codex-local.example'),
+    'utf8'
+  );
   for (const key of [
     'POSTIZ_URL=',
     'POSTIZ_CREDENTIAL_FILE=',
@@ -480,7 +573,12 @@ test('documents non-secret batch settings and exposes package scripts', async ()
     example,
     /^POSTIZ_FACEBOOK_PAGE_NAME="Vì cuộc sống là ko chờ đợi"$/m
   );
-  const packageJson = JSON.parse(await readFile(path.resolve('package.json'), 'utf8'));
-  assert.equal(typeof packageJson.scripts['test:book-facebook-drafts'], 'string');
+  const packageJson = JSON.parse(
+    await readFile(path.resolve('package.json'), 'utf8')
+  );
+  assert.equal(
+    typeof packageJson.scripts['test:book-facebook-drafts'],
+    'string'
+  );
   assert.equal(typeof packageJson.scripts['book-facebook-drafts'], 'string');
 });

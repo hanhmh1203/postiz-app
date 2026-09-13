@@ -5,7 +5,10 @@ import path from 'node:path';
 const COMMENT_PREFIX = 'Để nghe review trọn vẹn, bạn xem tại đây: ';
 
 export class PostizClientError extends Error {
-  constructor(message, { code = 'postiz_error', transient = false, status = 0 } = {}) {
+  constructor(
+    message,
+    { code = 'postiz_error', transient = false, status = 0 } = {}
+  ) {
     super(message);
     this.name = 'PostizClientError';
     this.code = code;
@@ -23,8 +26,10 @@ export async function readPostizCredentials(filePath) {
     if (separator < 1) continue;
     values[line.slice(0, separator).trim()] = line.slice(separator + 1).trim();
   }
-  if (!values.POSTIZ_EMAIL) throw new Error('Postiz credential file is missing POSTIZ_EMAIL');
-  if (!values.POSTIZ_PASSWORD) throw new Error('Postiz credential file is missing POSTIZ_PASSWORD');
+  if (!values.POSTIZ_EMAIL)
+    throw new Error('Postiz credential file is missing POSTIZ_EMAIL');
+  if (!values.POSTIZ_PASSWORD)
+    throw new Error('Postiz credential file is missing POSTIZ_PASSWORD');
   return { email: values.POSTIZ_EMAIL, password: values.POSTIZ_PASSWORD };
 }
 
@@ -33,7 +38,10 @@ function uuidFromText(value) {
   bytes[6] = (bytes[6] & 0x0f) | 0x50;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = bytes.toString('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(
+    12,
+    16
+  )}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 export function deterministicPostIds(marker) {
@@ -63,11 +71,14 @@ ${review}`;
 }
 
 export function validateFacebookCaption(caption) {
-  if (typeof caption !== 'string') throw new Error('Facebook caption must be text');
+  if (typeof caption !== 'string')
+    throw new Error('Facebook caption must be text');
   const trimmed = caption.trim();
   const length = Array.from(trimmed).length;
   if (length < 700 || length > 1200) {
-    throw new Error(`Facebook caption must contain 700 through 1,200 characters; received ${length}`);
+    throw new Error(
+      `Facebook caption must contain 700 through 1,200 characters; received ${length}`
+    );
   }
   if (/(?:https?:\/\/|www\.)/i.test(trimmed)) {
     throw new Error('Facebook caption must not contain a URL');
@@ -93,7 +104,10 @@ function isLongYoutubeVideoUrl(value) {
     const url = new URL(value);
     if (url.protocol !== 'https:') return false;
     const host = url.hostname.toLowerCase();
-    if ((host === 'youtube.com' || host === 'www.youtube.com') && url.pathname === '/watch') {
+    if (
+      (host === 'youtube.com' || host === 'www.youtube.com') &&
+      url.pathname === '/watch'
+    ) {
       return /^[A-Za-z0-9_-]+$/.test(url.searchParams.get('v') || '');
     }
     return host === 'youtu.be' && /^\/[A-Za-z0-9_-]+$/.test(url.pathname);
@@ -133,12 +147,18 @@ function mediaMimeType(mediaPath) {
     '.mp4': 'video/mp4',
   };
   const mimeType = supported[extension];
-  if (!mimeType) throw new Error(`Unsupported media extension: ${extension || '(none)'}`);
+  if (!mimeType)
+    throw new Error(`Unsupported media extension: ${extension || '(none)'}`);
   return mimeType;
 }
 
 export class PostizLocalClient {
-  constructor({ baseUrl, credentials, timeoutMs = 30_000, generationTimeoutMs = 280_000 }) {
+  constructor({
+    baseUrl,
+    credentials,
+    timeoutMs = 30_000,
+    generationTimeoutMs = 280_000,
+  }) {
     const normalizedBaseUrl = String(baseUrl).replace(/\/$/, '');
     this.baseUrl = normalizedBaseUrl.endsWith('/api')
       ? normalizedBaseUrl
@@ -165,9 +185,12 @@ export class PostizLocalClient {
     this.auth = response.headers.get('auth') || authFromSetCookie(response);
     this.showorg = response.headers.get('showorg') || '';
     if (!this.auth) {
-      throw new PostizClientError('Postiz login did not return an authentication token', {
-        code: 'postiz_auth_token_missing',
-      });
+      throw new PostizClientError(
+        'Postiz login did not return an authentication token',
+        {
+          code: 'postiz_auth_token_missing',
+        }
+      );
     }
   }
 
@@ -209,9 +232,12 @@ export class PostizLocalClient {
       try {
         event = JSON.parse(line);
       } catch {
-        throw new PostizClientError('Postiz generator returned malformed NDJSON', {
-          code: 'generator_malformed_response',
-        });
+        throw new PostizClientError(
+          'Postiz generator returned malformed NDJSON',
+          {
+            code: 'generator_malformed_response',
+          }
+        );
       }
       if (event?.error) {
         throw new PostizClientError('Postiz generator reported an error', {
@@ -221,19 +247,31 @@ export class PostizLocalClient {
       }
       if (event?.data?.output) output = event.data.output;
     }
-    if (!output || typeof output.hook !== 'string' || output.content?.length !== 1) {
-      throw new PostizClientError('Postiz generator did not return one complete post', {
-        code: 'generator_incomplete_response',
-        transient: true,
-      });
+    if (
+      !output ||
+      typeof output.hook !== 'string' ||
+      output.content?.length !== 1
+    ) {
+      throw new PostizClientError(
+        'Postiz generator did not return one complete post',
+        {
+          code: 'generator_incomplete_response',
+          transient: true,
+        }
+      );
     }
     try {
-      return validateFacebookCaption(`${output.hook.trim()}\n\n${output.content[0].content.trim()}`);
+      return validateFacebookCaption(
+        `${output.hook.trim()}\n\n${output.content[0].content.trim()}`
+      );
     } catch {
-      throw new PostizClientError('Postiz generator returned content outside the Facebook contract', {
-        code: 'generator_content_invalid',
-        transient: true,
-      });
+      throw new PostizClientError(
+        'Postiz generator returned content outside the Facebook contract',
+        {
+          code: 'generator_content_invalid',
+          transient: true,
+        }
+      );
     }
   }
 
@@ -252,10 +290,13 @@ export class PostizLocalClient {
     });
     const media = await this.#json(response);
     if (!media?.id || !media?.path) {
-      throw new PostizClientError('Postiz media upload returned an invalid object', {
-        code: 'media_upload_invalid',
-        transient: true,
-      });
+      throw new PostizClientError(
+        'Postiz media upload returned an invalid object',
+        {
+          code: 'media_upload_invalid',
+          transient: true,
+        }
+      );
     }
     return { id: String(media.id), path: String(media.path) };
   }
@@ -282,7 +323,8 @@ export class PostizLocalClient {
   }
 
   async #createMediaDraft({ integrationId, content, comment, media, marker }) {
-    if (!media?.id || !media?.path) throw new Error('A saved Postiz media object is required');
+    if (!media?.id || !media?.path)
+      throw new Error('A saved Postiz media object is required');
     const ids = deterministicPostIds(marker);
     const payload = {
       type: 'draft',
@@ -293,13 +335,18 @@ export class PostizLocalClient {
         {
           integration: { id: integrationId },
           value: [
-            { id: ids.rootId, content, image: [{ id: media.id, path: media.path }] },
+            {
+              id: ids.rootId,
+              content,
+              image: [{ id: media.id, path: media.path }],
+            },
             { id: ids.commentId, content: comment, image: [] },
           ],
         },
       ],
     };
-    if (payload.type !== 'draft') throw new Error('Refusing to create a non-draft Postiz post');
+    if (payload.type !== 'draft')
+      throw new Error('Refusing to create a non-draft Postiz post');
     const response = await this.#fetch('/posts', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -308,22 +355,30 @@ export class PostizLocalClient {
     });
     const created = await this.#json(response);
     if (!Array.isArray(created) || !created[0]?.postId) {
-      throw new PostizClientError('Postiz draft creation returned an invalid response', {
-        code: 'draft_create_invalid',
-        transient: true,
-      });
+      throw new PostizClientError(
+        'Postiz draft creation returned an invalid response',
+        {
+          code: 'draft_create_invalid',
+          transient: true,
+        }
+      );
     }
     if (created[0].postId !== ids.rootId) {
-      throw new PostizClientError('Postiz did not preserve the requested draft identifier', {
-        code: 'draft_idempotency_mismatch',
-      });
+      throw new PostizClientError(
+        'Postiz did not preserve the requested draft identifier',
+        {
+          code: 'draft_idempotency_mismatch',
+        }
+      );
     }
     return { postId: ids.rootId, commentId: ids.commentId };
   }
 
   async findDraftByMarker(marker) {
     const ids = deterministicPostIds(marker);
-    const response = await this.#fetch(`/posts/${ids.rootId}`, { allowNotFound: true });
+    const response = await this.#fetch(`/posts/${ids.rootId}`, {
+      allowNotFound: true,
+    });
     if (response.status === 404) return null;
     const post = await this.#json(response);
     return post ? { postId: ids.rootId, commentId: ids.commentId, post } : null;
@@ -342,9 +397,13 @@ export class PostizLocalClient {
     } = {}
   ) {
     const requestHeaders = { ...headers };
-    if (json && body !== undefined) requestHeaders['content-type'] = 'application/json';
+    if (json && body !== undefined)
+      requestHeaders['content-type'] = 'application/json';
     if (authenticated) {
-      if (!this.auth) throw new PostizClientError('Postiz client is not authenticated', { code: 'not_authenticated' });
+      if (!this.auth)
+        throw new PostizClientError('Postiz client is not authenticated', {
+          code: 'not_authenticated',
+        });
       requestHeaders.auth = this.auth;
       if (this.showorg) requestHeaders.showorg = this.showorg;
     }
@@ -363,11 +422,20 @@ export class PostizLocalClient {
       });
     }
     if (!response.ok && !(allowNotFound && response.status === 404)) {
-      throw new PostizClientError(`Local Postiz returned HTTP ${response.status}`, {
-        code: response.status === 401 || response.status === 403 ? 'postiz_auth_failed' : 'postiz_http_error',
-        transient: response.status === 408 || response.status === 429 || response.status >= 500,
-        status: response.status,
-      });
+      throw new PostizClientError(
+        `Local Postiz returned HTTP ${response.status}`,
+        {
+          code:
+            response.status === 401 || response.status === 403
+              ? 'postiz_auth_failed'
+              : 'postiz_http_error',
+          transient:
+            response.status === 408 ||
+            response.status === 429 ||
+            response.status >= 500,
+          status: response.status,
+        }
+      );
     }
     return response;
   }

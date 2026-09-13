@@ -16,7 +16,10 @@ const PAGE_NAME = 'Vì cuộc sống là ko chờ đợi';
 function validCaption(title) {
   const sentences = Array.from(
     { length: 10 },
-    (_, index) => `${title}: ý ${index + 1} cho thấy một lựa chọn nhỏ có thể thay đổi cách ta nhìn và hành động mỗi ngày.`
+    (_, index) =>
+      `${title}: ý ${
+        index + 1
+      } cho thấy một lựa chọn nhỏ có thể thay đổi cách ta nhìn và hành động mỗi ngày.`
   ).join(' ');
   return `${sentences}\n\nXem phần review đầy đủ trong bình luận.\n\n#WillReadBook #ReviewSach #SachHay`;
 }
@@ -24,15 +27,25 @@ function validCaption(title) {
 async function createBook(root, name, { review = true, image = true } = {}) {
   const directory = path.join(root, name);
   await mkdir(directory, { recursive: true });
-  if (review) await writeFile(path.join(directory, `${name}-phan-tich.md`), `Review nguồn cho ${name}. `.repeat(20));
-  if (image) await writeFile(path.join(directory, 'land.png'), Buffer.from([137, 80, 78, 71]));
+  if (review)
+    await writeFile(
+      path.join(directory, `${name}-phan-tich.md`),
+      `Review nguồn cho ${name}. `.repeat(20)
+    );
+  if (image)
+    await writeFile(
+      path.join(directory, 'land.png'),
+      Buffer.from([137, 80, 78, 71])
+    );
   return {
     bookId: name,
     productionId: `${name}-production`,
     title: name,
     workflowDirectory: directory,
     youtubeUploadedAt: '2026-01-01T00:00:00.000Z',
-    videoUrl: `https://youtu.be/${name.replace(/[^A-Za-z0-9_-]/g, '') || 'video'}`,
+    videoUrl: `https://youtu.be/${
+      name.replace(/[^A-Za-z0-9_-]/g, '') || 'video'
+    }`,
   };
 }
 
@@ -89,7 +102,9 @@ function createFakeClient({
   };
   return {
     calls,
-    async login() { calls.login += 1; },
+    async login() {
+      calls.login += 1;
+    },
     async preflight(pageName) {
       calls.preflight += 1;
       assert.equal(pageName, PAGE_NAME);
@@ -112,7 +127,10 @@ function createFakeClient({
       calls.draft.push(input);
       const failures = draftFailures.get(input.title) || [];
       if (failures.length) throw failures.shift();
-      return { postId: `draft-${calls.draft.length}`, commentId: `comment-${calls.draft.length}` };
+      return {
+        postId: `draft-${calls.draft.length}`,
+        commentId: `comment-${calls.draft.length}`,
+      };
     },
     async createShortDraft(input) {
       calls.shortDraft.push(input);
@@ -123,7 +141,9 @@ function createFakeClient({
         commentId: `short-comment-${calls.shortDraft.length}`,
       };
     },
-    async findDraftByMarker() { return null; },
+    async findDraftByMarker() {
+      return null;
+    },
   };
 }
 
@@ -132,7 +152,8 @@ test('retries transient operations twice and does not retry permanent errors', a
   const value = await retryTransient(
     async () => {
       transientAttempts += 1;
-      if (transientAttempts < 3) throw Object.assign(new Error('temporary'), { transient: true });
+      if (transientAttempts < 3)
+        throw Object.assign(new Error('temporary'), { transient: true });
       return 'ok';
     },
     { retries: 2, delayMs: 0 }
@@ -142,10 +163,13 @@ test('retries transient operations twice and does not retry permanent errors', a
 
   let permanentAttempts = 0;
   await assert.rejects(
-    retryTransient(async () => {
-      permanentAttempts += 1;
-      throw new Error('permanent');
-    }, { retries: 2, delayMs: 0 }),
+    retryTransient(
+      async () => {
+        permanentAttempts += 1;
+        throw new Error('permanent');
+      },
+      { retries: 2, delayMs: 0 }
+    ),
     /permanent/
   );
   assert.equal(permanentAttempts, 1);
@@ -203,10 +227,15 @@ test('skips invalid resources and keeps scanning until the success limit is reac
     retryDelayMs: 0,
   });
 
-  assert.deepEqual(report.created.map(({ title }) => title), ['BookOne', 'BookTwo']);
+  assert.deepEqual(
+    report.created.map(({ title }) => title),
+    ['BookOne', 'BookTwo']
+  );
   assert.equal(report.skipped[0].reason, 'review_missing');
   assert.deepEqual(client.calls.generate, ['BookOne', 'BookTwo']);
-  const state = JSON.parse(await readFile(path.join(outputDirectory, 'state.json'), 'utf8'));
+  const state = JSON.parse(
+    await readFile(path.join(outputDirectory, 'state.json'), 'utf8')
+  );
   assert.equal(state.entries.length, 2);
 });
 
@@ -217,7 +246,10 @@ test('reports changed sources without generating a duplicate draft', async () =>
   const candidate = await createBook(root, 'BookOne');
   await writeFile(
     path.join(outputDirectory, 'state.json'),
-    JSON.stringify({ version: 1, entries: [{ bookId: 'BookOne', checksum: 'old-checksum' }] })
+    JSON.stringify({
+      version: 1,
+      entries: [{ bookId: 'BookOne', checksum: 'old-checksum' }],
+    })
   );
   const client = createFakeClient();
 
@@ -244,8 +276,13 @@ test('records a failed book and continues to the next valid book', async () => {
   const outputDirectory = path.join(root, 'outputs');
   const first = await createBook(root, 'BrokenBook');
   const second = await createBook(root, 'GoodBook');
-  const failure = Object.assign(new Error('generation failed'), { code: 'generator_failed', transient: false });
-  const client = createFakeClient({ generationFailures: new Map([['BrokenBook', [failure]]]) });
+  const failure = Object.assign(new Error('generation failed'), {
+    code: 'generator_failed',
+    transient: false,
+  });
+  const client = createFakeClient({
+    generationFailures: new Map([['BrokenBook', [failure]]]),
+  });
 
   const report = await runBookFacebookDraftBatch({
     databasePath: path.join(root, 'unused.sqlite3'),
@@ -262,15 +299,23 @@ test('records a failed book and continues to the next valid book', async () => {
 
   assert.equal(report.failed.length, 1);
   assert.equal(report.failed[0].reason, 'generator_failed');
-  assert.deepEqual(report.created.map(({ title }) => title), ['GoodBook']);
+  assert.deepEqual(
+    report.created.map(({ title }) => title),
+    ['GoodBook']
+  );
 });
 
 test('does not write completed state when draft creation fails', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'book-draft-state-'));
   const outputDirectory = path.join(root, 'outputs');
   const candidate = await createBook(root, 'BookOne');
-  const failure = Object.assign(new Error('draft failed'), { code: 'draft_failed', transient: false });
-  const client = createFakeClient({ draftFailures: new Map([['BookOne', [failure]]]) });
+  const failure = Object.assign(new Error('draft failed'), {
+    code: 'draft_failed',
+    transient: false,
+  });
+  const client = createFakeClient({
+    draftFailures: new Map([['BookOne', [failure]]]),
+  });
 
   const report = await runBookFacebookDraftBatch({
     databasePath: path.join(root, 'unused.sqlite3'),
@@ -286,12 +331,16 @@ test('does not write completed state when draft creation fails', async () => {
   });
 
   assert.equal(report.failed.length, 1);
-  const state = JSON.parse(await readFile(path.join(outputDirectory, 'state.json'), 'utf8'));
+  const state = JSON.parse(
+    await readFile(path.join(outputDirectory, 'state.json'), 'utf8')
+  );
   assert.equal(state.entries.length, 0);
 });
 
 test('creates missing Short drafts when the review is already in state', async () => {
-  const root = await mkdtemp(path.join(tmpdir(), 'book-draft-existing-review-'));
+  const root = await mkdtemp(
+    path.join(tmpdir(), 'book-draft-existing-review-')
+  );
   const outputDirectory = path.join(root, 'outputs');
   await mkdir(outputDirectory);
   const candidate = await createBook(root, 'BookOne');
@@ -313,7 +362,13 @@ test('creates missing Short drafts when the review is already in state', async (
     path.join(outputDirectory, 'state.json'),
     JSON.stringify({
       version: 2,
-      entries: [{ bookId: candidate.bookId, variant: 'review', checksum: reviewChecksum }],
+      entries: [
+        {
+          bookId: candidate.bookId,
+          variant: 'review',
+          checksum: reviewChecksum,
+        },
+      ],
     })
   );
   const client = createFakeClient();
@@ -336,8 +391,13 @@ test('creates missing Short drafts when the review is already in state', async (
     client.calls.shortDraft.map(({ shortName }) => shortName),
     ['short_01_hook', 'short_02_lesson']
   );
-  assert.deepEqual(report.created.map(({ variant }) => variant), ['short', 'short']);
-  const state = JSON.parse(await readFile(path.join(outputDirectory, 'state.json'), 'utf8'));
+  assert.deepEqual(
+    report.created.map(({ variant }) => variant),
+    ['short', 'short']
+  );
+  const state = JSON.parse(
+    await readFile(path.join(outputDirectory, 'state.json'), 'utf8')
+  );
   assert.deepEqual(
     state.entries.map(({ variant, shortName }) => ({ variant, shortName })),
     [
@@ -351,7 +411,10 @@ test('creates missing Short drafts when the review is already in state', async (
 test('skips one incomplete Short and continues other Shorts and books', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'book-draft-short-skip-'));
   const outputDirectory = path.join(root, 'outputs');
-  const first = await createBook(root, 'BookOne', { review: false, image: false });
+  const first = await createBook(root, 'BookOne', {
+    review: false,
+    image: false,
+  });
   const second = await createBook(root, 'BookTwo');
   await addShorts(first, [
     { name: 'short_01_missing', video: false },
@@ -374,7 +437,9 @@ test('skips one incomplete Short and continues other Shorts and books', async ()
   assert.equal(
     report.skipped.some(
       ({ variant, shortName, reason }) =>
-        variant === 'short' && shortName === 'short_01_missing' && reason === 'video_missing'
+        variant === 'short' &&
+        shortName === 'short_01_missing' &&
+        reason === 'video_missing'
     ),
     true
   );
@@ -387,7 +452,10 @@ test('skips one incomplete Short and continues other Shorts and books', async ()
 test('records one Short failure and still creates later Shorts from the same book', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'book-draft-short-failure-'));
   const outputDirectory = path.join(root, 'outputs');
-  const candidate = await createBook(root, 'BookOne', { review: false, image: false });
+  const candidate = await createBook(root, 'BookOne', {
+    review: false,
+    image: false,
+  });
   await addShorts(candidate, [
     { name: 'short_01_broken' },
     { name: 'short_02_ready' },

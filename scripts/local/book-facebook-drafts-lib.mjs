@@ -32,7 +32,9 @@ export function parseBatchArgs(argv) {
       const rawLimit = argv[index + 1];
       const limit = Number(rawLimit);
       if (!Number.isInteger(limit) || limit < 1 || limit > MAX_BATCH_LIMIT) {
-        throw new Error(`--limit must be an integer from 1 through ${MAX_BATCH_LIMIT}`);
+        throw new Error(
+          `--limit must be an integer from 1 through ${MAX_BATCH_LIMIT}`
+        );
       }
       options.limit = limit;
       index += 1;
@@ -59,7 +61,10 @@ export function isLongYoutubeUrl(value) {
     const url = new URL(value);
     if (url.protocol !== 'https:') return false;
     const host = url.hostname.toLowerCase();
-    if ((host === 'youtube.com' || host === 'www.youtube.com') && url.pathname === '/watch') {
+    if (
+      (host === 'youtube.com' || host === 'www.youtube.com') &&
+      url.pathname === '/watch'
+    ) {
       return /^[A-Za-z0-9_-]+$/.test(url.searchParams.get('v') || '');
     }
     return host === 'youtu.be' && /^\/[A-Za-z0-9_-]+$/.test(url.pathname);
@@ -70,7 +75,12 @@ export function isLongYoutubeUrl(value) {
 
 export function isPathInside(root, child) {
   const relative = path.relative(path.resolve(root), path.resolve(child));
-  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+  return (
+    relative === '' ||
+    (!relative.startsWith(`..${path.sep}`) &&
+      relative !== '..' &&
+      !path.isAbsolute(relative))
+  );
 }
 
 function toDirectorySlug(value) {
@@ -90,7 +100,8 @@ async function indexDirectoriesBySlug(root) {
   while (pending.length > 0) {
     const directory = pending.pop();
     const slug = toDirectorySlug(path.basename(directory));
-    if (slug) directories.set(slug, [...(directories.get(slug) || []), directory]);
+    if (slug)
+      directories.set(slug, [...(directories.get(slug) || []), directory]);
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       if (entry.isDirectory()) pending.push(path.join(directory, entry.name));
     }
@@ -109,14 +120,17 @@ function uniqueDirectoryMatching(directoriesBySlug, predicate) {
 
 function remapWorkflowDirectory(row, directoriesBySlug) {
   const titleSlug = toDirectorySlug(row.title);
-  const workflowSlug = toDirectorySlug(path.basename(String(row.workflowDirectory || '')));
+  const workflowSlug = toDirectorySlug(
+    path.basename(String(row.workflowDirectory || ''))
+  );
   const strategies = [
     (slug) => slug === titleSlug,
     (slug) => workflowSlug && slug === workflowSlug,
     (slug) => titleSlug.length >= 5 && slug.startsWith(`${titleSlug}-`),
     (slug) =>
       workflowSlug.length >= 5 &&
-      (slug.startsWith(`${workflowSlug}-`) || workflowSlug.startsWith(`${slug}-`)),
+      (slug.startsWith(`${workflowSlug}-`) ||
+        workflowSlug.startsWith(`${slug}-`)),
   ];
   for (const strategy of strategies) {
     const match = uniqueDirectoryMatching(directoriesBySlug, strategy);
@@ -137,7 +151,8 @@ export async function selectLatestReview(directory) {
   }
   candidates.sort(
     (left, right) =>
-      right.modifiedAt - left.modifiedAt || left.filePath.localeCompare(right.filePath)
+      right.modifiedAt - left.modifiedAt ||
+      left.filePath.localeCompare(right.filePath)
   );
   return candidates[0]?.filePath ?? null;
 }
@@ -206,7 +221,10 @@ export async function discoverShortResources(workflowDirectory) {
     throw error;
   }
 
-  const metadataPath = path.join(workflowDirectory, 'youtube_metadata_short.md');
+  const metadataPath = path.join(
+    workflowDirectory,
+    'youtube_metadata_short.md'
+  );
   let metadata = new Map();
   try {
     metadata = parseShortMetadata(await readFile(metadataPath, 'utf8'));
@@ -238,7 +256,8 @@ export async function discoverShortResources(workflowDirectory) {
     }
     try {
       const video = await stat(videoPath);
-      if (!video.isFile() || video.size === 0) throw Object.assign(new Error(), { code: 'ENOENT' });
+      if (!video.isFile() || video.size === 0)
+        throw Object.assign(new Error(), { code: 'ENOENT' });
     } catch {
       results.push({
         shortName,
@@ -270,7 +289,8 @@ export async function discoverPortalCandidates({ databasePath, batchRoot }) {
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
     const rows = database
-      .prepare(`
+      .prepare(
+        `
         SELECT
           p.id AS productionId,
           p.book_id AS bookId,
@@ -291,21 +311,29 @@ export async function discoverPortalCandidates({ databasePath, batchRoot }) {
           p.id,
           COALESCE(l.published_at, '') DESC,
           l.id DESC
-      `)
+      `
+      )
       .all();
 
     const candidates = [];
     const seenProductions = new Set();
     const seenDirectories = new Set();
     for (const row of rows) {
-      if (seenProductions.has(row.productionId) || !isLongYoutubeUrl(row.videoUrl)) continue;
+      if (
+        seenProductions.has(row.productionId) ||
+        !isLongYoutubeUrl(row.videoUrl)
+      )
+        continue;
       let resolvedDirectory;
       try {
         resolvedDirectory = await realpath(row.workflowDirectory);
       } catch {
         resolvedDirectory = null;
       }
-      if (!resolvedDirectory || !isPathInside(resolvedRoot, resolvedDirectory)) {
+      if (
+        !resolvedDirectory ||
+        !isPathInside(resolvedRoot, resolvedDirectory)
+      ) {
         resolvedDirectory = remapWorkflowDirectory(row, directoriesBySlug);
         if (!resolvedDirectory) continue;
       }
@@ -317,7 +345,9 @@ export async function discoverPortalCandidates({ databasePath, batchRoot }) {
         productionId: String(row.productionId),
         title: String(row.title),
         workflowDirectory: resolvedDirectory,
-        youtubeUploadedAt: row.youtubeUploadedAt ? String(row.youtubeUploadedAt) : '',
+        youtubeUploadedAt: row.youtubeUploadedAt
+          ? String(row.youtubeUploadedAt)
+          : '',
         videoUrl: String(row.videoUrl),
       });
     }
@@ -327,7 +357,11 @@ export async function discoverPortalCandidates({ databasePath, batchRoot }) {
   }
 }
 
-export async function computeSourceChecksum(candidate, pageName, templateVersion) {
+export async function computeSourceChecksum(
+  candidate,
+  pageName,
+  templateVersion
+) {
   const [review, image] = await Promise.all([
     readFile(candidate.reviewPath),
     readFile(candidate.imagePath),
@@ -349,7 +383,12 @@ export async function computeSourceChecksum(candidate, pageName, templateVersion
   return hash.digest('hex');
 }
 
-export async function computeShortChecksum(candidate, short, pageName, templateVersion) {
+export async function computeShortChecksum(
+  candidate,
+  short,
+  pageName,
+  templateVersion
+) {
   const video = await readFile(short.videoPath);
   const hash = createHash('sha256');
   for (const value of [
@@ -380,7 +419,9 @@ export function classifyCandidate(
     if (entry.bookId !== candidate.bookId) return false;
     const entryVariant = entry.variant || 'review';
     if (entryVariant !== identity.variant) return false;
-    return identity.variant !== 'short' || entry.shortName === identity.shortName;
+    return (
+      identity.variant !== 'short' || entry.shortName === identity.shortName
+    );
   });
   if (!existing) return 'new';
   return existing.checksum === checksum ? 'skipped' : 'source_changed';
@@ -395,7 +436,10 @@ export async function loadState(statePath) {
     if (parsed.version === 1) {
       return {
         version: STATE_VERSION,
-        entries: parsed.entries.map((entry) => ({ ...entry, variant: 'review' })),
+        entries: parsed.entries.map((entry) => ({
+          ...entry,
+          variant: 'review',
+        })),
       };
     }
     if (parsed.version !== STATE_VERSION) {
@@ -403,7 +447,8 @@ export async function loadState(statePath) {
     }
     return parsed;
   } catch (error) {
-    if (error?.code === 'ENOENT') return { version: STATE_VERSION, entries: [] };
+    if (error?.code === 'ENOENT')
+      return { version: STATE_VERSION, entries: [] };
     throw error;
   }
 }
@@ -411,7 +456,9 @@ export async function loadState(statePath) {
 async function atomicJsonWrite(filePath, value) {
   await mkdir(path.dirname(filePath), { recursive: true });
   const temporaryPath = `${filePath}.${process.pid}.tmp`;
-  await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, {
+    mode: 0o600,
+  });
   await rename(temporaryPath, filePath);
 }
 
@@ -440,7 +487,9 @@ function safeReportEntry(entry) {
     'previewPath',
   ];
   return Object.fromEntries(
-    allowedKeys.filter((key) => entry?.[key] !== undefined).map((key) => [key, entry[key]])
+    allowedKeys
+      .filter((key) => entry?.[key] !== undefined)
+      .map((key) => [key, entry[key]])
   );
 }
 
@@ -448,7 +497,11 @@ function markdownSection(title, entries) {
   const lines = [`## ${title}`, ''];
   if (entries.length === 0) return [...lines, '- None', ''];
   for (const entry of entries) {
-    const suffix = entry.reason ? ` — ${entry.reason}` : entry.draftId ? ` — draft ${entry.draftId}` : '';
+    const suffix = entry.reason
+      ? ` — ${entry.reason}`
+      : entry.draftId
+      ? ` — draft ${entry.draftId}`
+      : '';
     lines.push(`- ${entry.title || entry.bookId}${suffix}`);
   }
   lines.push('');
