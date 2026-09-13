@@ -178,6 +178,37 @@ test('caption validation rejects URLs, missing hashtag, and out-of-range length'
   );
 });
 
+test('marks invalid generated captions as transient so the batch can retry', async () => {
+  const server = await startServer(async (request, response) => {
+    if (request.url === '/auth/login') {
+      await requestBody(request);
+      response.setHeader('auth', 'jwt-value');
+      response.end('{}');
+      return;
+    }
+    await requestBody(request);
+    response.end(`${JSON.stringify({
+      name: 'codex-complete',
+      data: {
+        output: {
+          hook: 'Quá ngắn',
+          content: [{ content: 'Nội dung quá ngắn #WillReadBook #SachHay #DocSach' }],
+        },
+      },
+    })}\n`);
+  });
+  try {
+    const client = new PostizLocalClient({ baseUrl: server.baseUrl, credentials: { email: 'a@b.com', password: 'secret' } });
+    await client.login();
+    await assert.rejects(
+      client.generateCaption({ title: 'Tên sách', review: 'Review nguồn đủ dài để gửi tới generator.' }),
+      (error) => error.code === 'generator_content_invalid' && error.transient === true
+    );
+  } finally {
+    await server.close();
+  }
+});
+
 test('uploads land.png and creates an idempotent draft with a first comment', async () => {
   const received = {};
   const server = await startServer(async (request, response) => {

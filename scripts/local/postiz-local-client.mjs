@@ -175,7 +175,14 @@ export class PostizLocalClient {
         transient: true,
       });
     }
-    return validateFacebookCaption(`${output.hook.trim()}\n\n${output.content[0].content.trim()}`);
+    try {
+      return validateFacebookCaption(`${output.hook.trim()}\n\n${output.content[0].content.trim()}`);
+    } catch {
+      throw new PostizClientError('Postiz generator returned content outside the Facebook contract', {
+        code: 'generator_content_invalid',
+        transient: true,
+      });
+    }
   }
 
   async uploadMedia(imagePath) {
