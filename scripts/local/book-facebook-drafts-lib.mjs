@@ -13,7 +13,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const DEFAULT_BATCH_LIMIT = 10;
 export const MAX_BATCH_LIMIT = 10;
-export const STATE_VERSION = 1;
+export const STATE_VERSION = 2;
 
 export function parseBatchArgs(argv) {
   const options = {
@@ -142,6 +142,128 @@ export async function selectLatestReview(directory) {
   return candidates[0]?.filePath ?? null;
 }
 
+export function formatFacebookHashtags(value) {
+  return String(value || '')
+    .split(',')
+    .map((tag) =>
+      tag
+        .trim()
+        .replace(/^#+/, '')
+        .replace(/[^\p{L}\p{N}_]+/gu, '')
+    )
+    .filter(Boolean)
+    .map((tag) => `#${tag}`)
+    .join(' ');
+}
+
+function parseShortMetadata(markdown) {
+  const sections = new Map();
+  let current;
+  let field;
+  for (const line of String(markdown || '').split(/\r?\n/)) {
+    const sectionMatch = line.match(/^###\s+Short\s+(\d{2})\b/i);
+    if (sectionMatch) {
+      current = { description: [], hashtags: [] };
+      sections.set(sectionMatch[1], current);
+      field = undefined;
+      continue;
+    }
+    if (/^####\s+Description\s*$/i.test(line)) {
+      field = current ? 'description' : undefined;
+      continue;
+    }
+    if (/^####\s+Hashtag\s*$/i.test(line)) {
+      field = current ? 'hashtags' : undefined;
+      continue;
+    }
+    if (/^#{1,6}\s+/.test(line)) {
+      field = undefined;
+      continue;
+    }
+    if (current && field) current[field].push(line);
+  }
+  return new Map(
+    [...sections].map(([number, section]) => [
+      number,
+      {
+        description: section.description.join('\n').trim(),
+        hashtags: formatFacebookHashtags(section.hashtags.join('\n').trim()),
+      },
+    ])
+  );
+}
+
+export async function discoverShortResources(workflowDirectory) {
+  const shortsPath = path.join(workflowDirectory, 'shorts.txt');
+  let rows;
+  try {
+    rows = (await readFile(shortsPath, 'utf8'))
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('#'));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+
+  const metadataPath = path.join(workflowDirectory, 'youtube_metadata_short.md');
+  let metadata = new Map();
+  try {
+    metadata = parseShortMetadata(await readFile(metadataPath, 'utf8'));
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+
+  const results = [];
+  for (const row of rows) {
+    const shortName = row.split(/\s+/)[0];
+    const shortNumber = shortName.match(/^short_(\d{2})(?:_|$)/i)?.[1] || '';
+    const videoPath = path.join(
+      workflowDirectory,
+      'output',
+      'shorts',
+      shortName,
+      `${shortName}.mp4`
+    );
+    const section = metadata.get(shortNumber);
+    if (!shortNumber || !section?.description || !section?.hashtags) {
+      results.push({
+        shortName,
+        shortNumber,
+        videoPath,
+        metadataPath,
+        status: 'metadata_missing',
+      });
+      continue;
+    }
+    try {
+      const video = await stat(videoPath);
+      if (!video.isFile() || video.size === 0) throw Object.assign(new Error(), { code: 'ENOENT' });
+    } catch {
+      results.push({
+        shortName,
+        shortNumber,
+        videoPath,
+        metadataPath,
+        description: section.description,
+        hashtags: section.hashtags,
+        status: 'video_missing',
+      });
+      continue;
+    }
+    results.push({
+      shortName,
+      shortNumber,
+      videoPath,
+      metadataPath,
+      description: section.description,
+      hashtags: section.hashtags,
+      status: 'ready',
+    });
+  }
+  return results;
+}
+
 export async function discoverPortalCandidates({ databasePath, batchRoot }) {
   const resolvedRoot = await realpath(batchRoot);
   const directoriesBySlug = await indexDirectoriesBySlug(resolvedRoot);
@@ -227,8 +349,39 @@ export async function computeSourceChecksum(candidate, pageName, templateVersion
   return hash.digest('hex');
 }
 
-export function classifyCandidate(candidate, state, checksum) {
-  const existing = state.entries.find((entry) => entry.bookId === candidate.bookId);
+export async function computeShortChecksum(candidate, short, pageName, templateVersion) {
+  const video = await readFile(short.videoPath);
+  const hash = createHash('sha256');
+  for (const value of [
+    candidate.bookId,
+    candidate.productionId,
+    candidate.videoUrl,
+    pageName,
+    templateVersion,
+    short.shortName,
+    short.shortNumber,
+    short.description,
+    short.hashtags,
+  ]) {
+    hash.update(String(value));
+    hash.update('\0');
+  }
+  hash.update(video);
+  return hash.digest('hex');
+}
+
+export function classifyCandidate(
+  candidate,
+  state,
+  checksum,
+  identity = { variant: 'review' }
+) {
+  const existing = state.entries.find((entry) => {
+    if (entry.bookId !== candidate.bookId) return false;
+    const entryVariant = entry.variant || 'review';
+    if (entryVariant !== identity.variant) return false;
+    return identity.variant !== 'short' || entry.shortName === identity.shortName;
+  });
   if (!existing) return 'new';
   return existing.checksum === checksum ? 'skipped' : 'source_changed';
 }
@@ -236,7 +389,16 @@ export function classifyCandidate(candidate, state, checksum) {
 export async function loadState(statePath) {
   try {
     const parsed = JSON.parse(await readFile(statePath, 'utf8'));
-    if (parsed?.version !== STATE_VERSION || !Array.isArray(parsed.entries)) {
+    if (!Array.isArray(parsed?.entries)) {
+      throw new Error('Draft state has an unsupported format');
+    }
+    if (parsed.version === 1) {
+      return {
+        version: STATE_VERSION,
+        entries: parsed.entries.map((entry) => ({ ...entry, variant: 'review' })),
+      };
+    }
+    if (parsed.version !== STATE_VERSION) {
       throw new Error('Draft state has an unsupported format');
     }
     return parsed;
@@ -261,6 +423,9 @@ function safeReportEntry(entry) {
   const allowedKeys = [
     'bookId',
     'productionId',
+    'variant',
+    'shortName',
+    'shortNumber',
     'title',
     'status',
     'reason',
@@ -268,6 +433,8 @@ function safeReportEntry(entry) {
     'group',
     'reviewPath',
     'imagePath',
+    'videoPath',
+    'metadataPath',
     'videoUrl',
     'checksum',
     'previewPath',

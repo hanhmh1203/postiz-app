@@ -8,8 +8,11 @@ import { DatabaseSync } from 'node:sqlite';
 
 import {
   classifyCandidate,
+  computeShortChecksum,
   computeSourceChecksum,
   discoverPortalCandidates,
+  discoverShortResources,
+  formatFacebookHashtags,
   isLongYoutubeUrl,
   isPathInside,
   loadState,
@@ -120,6 +123,60 @@ test('selects the newest analysis Markdown and ignores profile and metadata file
   await utimes(newer, new Date('2026-02-01'), new Date('2026-02-01'));
 
   assert.equal(await selectLatestReview(directory), newer);
+});
+
+test('discovers every optional Short and isolates missing video or metadata', async () => {
+  const directory = await makeTempDirectory();
+  await writeFile(
+    path.join(directory, 'shorts.txt'),
+    [
+      '# generated Shorts',
+      'short_01_ready 15 15',
+      'short_02_no_video 15 15',
+      'short_03_no_metadata 15 15',
+    ].join('\n')
+  );
+  await writeFile(
+    path.join(directory, 'youtube_metadata_short.md'),
+    [
+      '### Short 01 - Ready',
+      '#### Description',
+      'Mô tả Short đã duyệt.',
+      '#### Hashtag',
+      'Shorts, Tom Tat Sach, #WillReadBook',
+      '',
+      '### Short 02 - Missing video',
+      '#### Description',
+      'Mô tả video bị thiếu.',
+      '#### Hashtag',
+      'Shorts, WillReadBook',
+      '',
+      '### Short 03 - Missing metadata',
+      '#### Description',
+      'Có description nhưng thiếu hashtag.',
+    ].join('\n')
+  );
+  const readyDirectory = path.join(directory, 'output', 'shorts', 'short_01_ready');
+  await mkdir(readyDirectory, { recursive: true });
+  await writeFile(path.join(readyDirectory, 'short_01_ready.mp4'), Buffer.from('video-bytes'));
+
+  const shorts = await discoverShortResources(directory);
+
+  assert.deepEqual(
+    shorts.map(({ shortName, shortNumber, status }) => ({ shortName, shortNumber, status })),
+    [
+      { shortName: 'short_01_ready', shortNumber: '01', status: 'ready' },
+      { shortName: 'short_02_no_video', shortNumber: '02', status: 'video_missing' },
+      { shortName: 'short_03_no_metadata', shortNumber: '03', status: 'metadata_missing' },
+    ]
+  );
+  assert.equal(shorts[0].description, 'Mô tả Short đã duyệt.');
+  assert.equal(shorts[0].hashtags, '#Shorts #TomTatSach #WillReadBook');
+  assert.equal(
+    formatFacebookHashtags('Shorts, Tom Tat Sach, #WillReadBook'),
+    '#Shorts #TomTatSach #WillReadBook'
+  );
+  assert.deepEqual(await discoverShortResources(path.join(directory, 'missing-book')), []);
 });
 
 test('discovers uploaded books inside the root in oldest-first order', async () => {
@@ -307,10 +364,79 @@ test('computes stable source checksums and classifies duplicate and changed sour
   );
 });
 
+test('classifies review and Short state independently and hashes Short content', async () => {
+  const root = await makeTempDirectory();
+  const videoPath = path.join(root, 'short_01.mp4');
+  await writeFile(videoPath, Buffer.from('video-one'));
+  const candidate = {
+    bookId: 'book-1',
+    productionId: 'production-1',
+    videoUrl: 'https://youtu.be/abc123',
+  };
+  const short = {
+    shortName: 'short_01_hook',
+    shortNumber: '01',
+    videoPath,
+    description: 'Mô tả Short',
+    hashtags: '#Shorts #WillReadBook',
+  };
+  const checksum = await computeShortChecksum(candidate, short, PAGE_NAME, 'short-v1');
+  assert.equal(checksum, await computeShortChecksum(candidate, short, PAGE_NAME, 'short-v1'));
+
+  const reviewState = {
+    entries: [{ bookId: 'book-1', variant: 'review', checksum: 'review-checksum' }],
+  };
+  assert.equal(
+    classifyCandidate(candidate, reviewState, checksum, {
+      variant: 'short',
+      shortName: short.shortName,
+    }),
+    'new'
+  );
+  const shortState = {
+    entries: [
+      {
+        bookId: 'book-1',
+        variant: 'short',
+        shortName: short.shortName,
+        checksum,
+      },
+    ],
+  };
+  assert.equal(
+    classifyCandidate(candidate, shortState, checksum, {
+      variant: 'short',
+      shortName: short.shortName,
+    }),
+    'skipped'
+  );
+  await writeFile(videoPath, Buffer.from('video-two'));
+  assert.notEqual(
+    checksum,
+    await computeShortChecksum(candidate, short, PAGE_NAME, 'short-v1')
+  );
+});
+
+const PAGE_NAME = 'Vì cuộc sống là ko chờ đợi';
+
+test('migrates version 1 review entries to version 2 state', async () => {
+  const directory = await makeTempDirectory();
+  const statePath = path.join(directory, 'state.json');
+  await writeFile(
+    statePath,
+    JSON.stringify({ version: 1, entries: [{ bookId: 'book-1', checksum: 'checksum-1' }] })
+  );
+
+  assert.deepEqual(await loadState(statePath), {
+    version: 2,
+    entries: [{ bookId: 'book-1', checksum: 'checksum-1', variant: 'review' }],
+  });
+});
+
 test('loads missing state and atomically writes safe JSON and Markdown reports', async () => {
   const outputDirectory = path.join(await makeTempDirectory(), 'outputs');
   assert.deepEqual(await loadState(path.join(outputDirectory, 'state.json')), {
-    version: 1,
+    version: 2,
     entries: [],
   });
 
