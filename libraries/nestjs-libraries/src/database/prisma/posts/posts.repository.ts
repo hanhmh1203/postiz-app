@@ -572,7 +572,10 @@ export class PostsRepository {
           where: {
             id: value.id || uuidv4(),
           },
-          create: { ...updateData('create') },
+          create: {
+            ...(value.id ? { id: value.id } : {}),
+            ...updateData('create'),
+          },
           update: {
             ...updateData('update'),
             lastMessage: {

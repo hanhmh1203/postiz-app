@@ -73,6 +73,31 @@ export function isPathInside(root, child) {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
+function toDirectorySlug(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+    .replace(/đ/g, 'd')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-+/g, '-');
+}
+
+async function indexDirectoriesBySlug(root) {
+  const directories = new Map();
+  const pending = [root];
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    const slug = toDirectorySlug(path.basename(directory));
+    if (slug) directories.set(slug, [...(directories.get(slug) || []), directory]);
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.isDirectory()) pending.push(path.join(directory, entry.name));
+    }
+  }
+  return directories;
+}
+
 export async function selectLatestReview(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const candidates = [];
@@ -92,6 +117,7 @@ export async function selectLatestReview(directory) {
 
 export async function discoverPortalCandidates({ databasePath, batchRoot }) {
   const resolvedRoot = await realpath(batchRoot);
+  const directoriesBySlug = await indexDirectoriesBySlug(resolvedRoot);
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
     const rows = database
@@ -127,9 +153,13 @@ export async function discoverPortalCandidates({ databasePath, batchRoot }) {
       try {
         resolvedDirectory = await realpath(row.workflowDirectory);
       } catch {
-        continue;
+        resolvedDirectory = null;
       }
-      if (!isPathInside(resolvedRoot, resolvedDirectory)) continue;
+      if (!resolvedDirectory || !isPathInside(resolvedRoot, resolvedDirectory)) {
+        const matches = directoriesBySlug.get(toDirectorySlug(row.title)) || [];
+        if (matches.length !== 1) continue;
+        [resolvedDirectory] = matches;
+      }
       seenProductions.add(row.productionId);
       candidates.push({
         bookId: String(row.bookId),

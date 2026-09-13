@@ -64,11 +64,33 @@ test('reads local Postiz credentials without accepting an incomplete file', asyn
   await assert.rejects(readPostizCredentials(validPath), /password/i);
 });
 
+test('uses the Postiz /api prefix when configured with the public app origin', async () => {
+  const server = await startServer(async (request, response) => {
+    await requestBody(request);
+    if (request.url === '/api/auth/login') {
+      response.setHeader('auth', 'jwt-value');
+      response.end('{}');
+      return;
+    }
+    response.statusCode = 404;
+    response.end();
+  });
+  try {
+    const client = new PostizLocalClient({
+      baseUrl: server.baseUrl,
+      credentials: { email: 'a@b.com', password: 'secret' },
+    });
+    await client.login();
+  } finally {
+    await server.close();
+  }
+});
+
 test('logs in and resolves exactly one complete Facebook Page integration', async () => {
   const requests = [];
   const server = await startServer(async (request, response) => {
     requests.push({ url: request.url, auth: request.headers.auth, showorg: request.headers.showorg });
-    if (request.url === '/auth/login') {
+    if (request.url === '/api/auth/login') {
       assert.deepEqual(JSON.parse((await requestBody(request)).toString()), {
         email: 'reader@example.com',
         password: 'safe-local-value',
@@ -80,7 +102,7 @@ test('logs in and resolves exactly one complete Facebook Page integration', asyn
       response.end(JSON.stringify({ login: true }));
       return;
     }
-    if (request.url === '/integrations/list') {
+    if (request.url === '/api/integrations/list') {
       response.end(JSON.stringify({
         integrations: [
           {
@@ -107,7 +129,7 @@ test('logs in and resolves exactly one complete Facebook Page integration', asyn
     const integration = await client.preflight('Vì cuộc sống là ko chờ đợi');
     assert.equal(integration.id, 'page-integration');
     assert.deepEqual(requests[1], {
-      url: '/integrations/list',
+      url: '/api/integrations/list',
       auth: 'jwt-value',
       showorg: 'org-value',
     });
@@ -118,7 +140,7 @@ test('logs in and resolves exactly one complete Facebook Page integration', asyn
 
 test('rejects ambiguous Page integration matches', async () => {
   const server = await startServer(async (request, response) => {
-    if (request.url === '/auth/login') {
+    if (request.url === '/api/auth/login') {
       await requestBody(request);
       response.setHeader('auth', 'jwt-value');
       response.end('{}');
@@ -143,7 +165,7 @@ test('rejects ambiguous Page integration matches', async () => {
 test('generates and validates one Facebook caption through Postiz NDJSON', async () => {
   let generatorBody;
   const server = await startServer(async (request, response) => {
-    if (request.url === '/auth/login') {
+    if (request.url === '/api/auth/login') {
       await requestBody(request);
       response.setHeader('auth', 'jwt-value');
       response.end('{}');
@@ -161,7 +183,8 @@ test('generates and validates one Facebook caption through Postiz NDJSON', async
     assert.equal(generatorBody.format, 'one_long');
     assert.equal(generatorBody.tone, 'personal');
     assert.equal(generatorBody.isPicture, false);
-    assert.match(generatorBody.research, /700.*1\.200/);
+    assert.match(generatorBody.research, /850.*1\.050/);
+    assert.match(generatorBody.research, /không được vượt quá 1\.200/i);
     assert.doesNotThrow(() => validateFacebookCaption(caption));
   } finally {
     await server.close();
@@ -178,9 +201,32 @@ test('caption validation rejects URLs, missing hashtag, and out-of-range length'
   );
 });
 
+test('draft creation rejects YouTube Shorts and playlist comments', async () => {
+  const client = new PostizLocalClient({
+    baseUrl: 'http://127.0.0.1:1',
+    credentials: { email: 'a@b.com', password: 'secret' },
+  });
+  const caption = `${'Một nhận xét có căn cứ từ nội dung sách. '.repeat(18)}#WillReadBook #ReviewSach #SachHay`;
+  for (const videoUrl of [
+    'https://www.youtube.com/shorts/abc123',
+    'https://www.youtube.com/playlist?list=PL123',
+  ]) {
+    await assert.rejects(
+      client.createDraft({
+        integrationId: 'page-id',
+        caption,
+        comment: `Để nghe review trọn vẹn, bạn xem tại đây: ${videoUrl}`,
+        media: { id: 'media-id', path: '/uploads/land.png' },
+        marker: 'stable-marker-123',
+      }),
+      /long YouTube/i
+    );
+  }
+});
+
 test('marks invalid generated captions as transient so the batch can retry', async () => {
   const server = await startServer(async (request, response) => {
-    if (request.url === '/auth/login') {
+    if (request.url === '/api/auth/login') {
       await requestBody(request);
       response.setHeader('auth', 'jwt-value');
       response.end('{}');
@@ -212,19 +258,19 @@ test('marks invalid generated captions as transient so the batch can retry', asy
 test('uploads land.png and creates an idempotent draft with a first comment', async () => {
   const received = {};
   const server = await startServer(async (request, response) => {
-    if (request.url === '/auth/login') {
+    if (request.url === '/api/auth/login') {
       await requestBody(request);
       response.setHeader('auth', 'jwt-value');
       response.end('{}');
       return;
     }
-    if (request.url === '/media/upload-simple') {
+    if (request.url === '/api/media/upload-simple') {
       received.mediaContentType = request.headers['content-type'];
       received.mediaBody = await requestBody(request);
       response.end(JSON.stringify({ id: 'media-id', path: '/uploads/land.png' }));
       return;
     }
-    if (request.url === '/posts') {
+    if (request.url === '/api/posts') {
       received.draft = JSON.parse((await requestBody(request)).toString());
       response.end(JSON.stringify([{ postId: received.draft.posts[0].value[0].id, integration: 'page-id' }]));
       return;
@@ -259,6 +305,44 @@ test('uploads land.png and creates an idempotent draft with a first comment', as
     assert.deepEqual(received.draft.posts[0].value[0].image, [{ id: 'media-id', path: '/uploads/land.png' }]);
     assert.deepEqual(received.draft.posts[0].value[1].image, []);
     assert.equal(result.postId, ids.rootId);
+  } finally {
+    await server.close();
+  }
+});
+
+test('rejects draft creation when Postiz does not preserve the requested id', async () => {
+  const server = await startServer(async (request, response) => {
+    if (request.url === '/api/auth/login') {
+      await requestBody(request);
+      response.setHeader('auth', 'jwt-value');
+      response.end('{}');
+      return;
+    }
+    if (request.url === '/api/posts') {
+      await requestBody(request);
+      response.end(JSON.stringify([{ postId: 'different-server-id', integration: 'page-id' }]));
+      return;
+    }
+    response.statusCode = 404;
+    response.end();
+  });
+  try {
+    const client = new PostizLocalClient({
+      baseUrl: server.baseUrl,
+      credentials: { email: 'a@b.com', password: 'secret' },
+    });
+    await client.login();
+    const caption = `${'Một nhận xét có căn cứ từ nội dung sách. '.repeat(18)}#WillReadBook #ReviewSach #SachHay`;
+    await assert.rejects(
+      client.createDraft({
+        integrationId: 'page-id',
+        caption,
+        comment: 'Để nghe review trọn vẹn, bạn xem tại đây: https://youtu.be/abc123',
+        media: { id: 'media-id', path: '/uploads/land.png' },
+        marker: 'stable-marker-123',
+      }),
+      (error) => error.code === 'draft_idempotency_mismatch'
+    );
   } finally {
     await server.close();
   }

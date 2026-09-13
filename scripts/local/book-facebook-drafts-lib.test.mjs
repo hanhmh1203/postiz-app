@@ -164,6 +164,50 @@ test('discovers uploaded books inside the root in oldest-first order', async () 
   );
 });
 
+test('remaps a stale portal workflow path to one exact title slug inside the batch root', async () => {
+  const root = await makeTempDirectory();
+  const mapped = path.join(root, 'archive', 'tu-tot-den-vi-dai');
+  await mkdir(mapped, { recursive: true });
+  const databasePath = path.join(root, 'library.sqlite3');
+
+  createPortalDatabase(databasePath, [
+    {
+      bookId: 'book-1',
+      productionId: 'production-1',
+      title: 'Từ tốt đến vĩ đại',
+      workflowDirectory: '/old-machine/books/tu-tot-den-vi-dai-jim-collins',
+      youtubeUploadedAt: '2026-01-01T00:00:00.000Z',
+      videoUrl: 'https://www.youtube.com/watch?v=abc123',
+    },
+  ]);
+
+  const candidates = await discoverPortalCandidates({ databasePath, batchRoot: root });
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].workflowDirectory, await realpath(mapped));
+});
+
+test('does not guess when a title slug maps to more than one resource directory', async () => {
+  const root = await makeTempDirectory();
+  await Promise.all([
+    mkdir(path.join(root, 'one', 'same-book'), { recursive: true }),
+    mkdir(path.join(root, 'two', 'same-book'), { recursive: true }),
+  ]);
+  const databasePath = path.join(root, 'library.sqlite3');
+
+  createPortalDatabase(databasePath, [
+    {
+      bookId: 'book-1',
+      productionId: 'production-1',
+      title: 'Same Book',
+      workflowDirectory: '/old-machine/books/same-book',
+      youtubeUploadedAt: '2026-01-01T00:00:00.000Z',
+      videoUrl: 'https://youtu.be/abc123',
+    },
+  ]);
+
+  assert.deepEqual(await discoverPortalCandidates({ databasePath, batchRoot: root }), []);
+});
+
 test('computes stable source checksums and classifies duplicate and changed sources', async () => {
   const root = await makeTempDirectory();
   const reviewPath = path.join(root, 'book-phan-tich.md');
@@ -237,6 +281,10 @@ test('documents non-secret batch settings and exposes package scripts', async ()
   ]) {
     assert.match(example, new RegExp(`^${key}`, 'm'));
   }
+  assert.match(
+    example,
+    /^POSTIZ_FACEBOOK_PAGE_NAME="Vì cuộc sống là ko chờ đợi"$/m
+  );
   const packageJson = JSON.parse(await readFile(path.resolve('package.json'), 'utf8'));
   assert.equal(typeof packageJson.scripts['test:book-facebook-drafts'], 'string');
   assert.equal(typeof packageJson.scripts['book-facebook-drafts'], 'string');

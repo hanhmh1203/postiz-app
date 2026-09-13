@@ -50,7 +50,7 @@ export function buildFacebookResearchBrief({ title, review }) {
   return `Viết một bài review Facebook bằng tiếng Việt cho cuốn sách “${title}”.
 
 Yêu cầu bắt buộc:
-- Tổng độ dài từ 700 đến 1.200 ký tự, tính cả hashtag.
+- Nhắm tới tổng độ dài từ 850 đến 1.050 ký tự, tính cả hashtag; tuyệt đối không được vượt quá 1.200 ký tự.
 - Mở đầu bằng một câu gợi tò mò có căn cứ trong review nguồn.
 - Chọn 2-3 ý đáng chú ý nhất và một giá trị thực tế người đọc có thể nhận được.
 - Kết bằng lời mời xem review đầy đủ trong bình luận.
@@ -88,9 +88,26 @@ function authFromSetCookie(response) {
   return match?.[1] ? decodeURIComponent(match[1]) : '';
 }
 
+function isLongYoutubeVideoUrl(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') return false;
+    const host = url.hostname.toLowerCase();
+    if ((host === 'youtube.com' || host === 'www.youtube.com') && url.pathname === '/watch') {
+      return /^[A-Za-z0-9_-]+$/.test(url.searchParams.get('v') || '');
+    }
+    return host === 'youtu.be' && /^\/[A-Za-z0-9_-]+$/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
 export class PostizLocalClient {
   constructor({ baseUrl, credentials, timeoutMs = 30_000, generationTimeoutMs = 280_000 }) {
-    this.baseUrl = String(baseUrl).replace(/\/$/, '');
+    const normalizedBaseUrl = String(baseUrl).replace(/\/$/, '');
+    this.baseUrl = normalizedBaseUrl.endsWith('/api')
+      ? normalizedBaseUrl
+      : `${normalizedBaseUrl}/api`;
     this.credentials = credentials;
     this.timeoutMs = timeoutMs;
     this.generationTimeoutMs = generationTimeoutMs;
@@ -210,9 +227,8 @@ export class PostizLocalClient {
       throw new Error('The first comment does not match the required template');
     }
     const videoUrl = comment.slice(COMMENT_PREFIX.length).trim();
-    const parsedVideo = new URL(videoUrl);
-    if (parsedVideo.protocol !== 'https:' || !/^(?:www\.)?(?:youtube\.com|youtu\.be)$/.test(parsedVideo.hostname)) {
-      throw new Error('The first comment must contain a valid YouTube URL');
+    if (!isLongYoutubeVideoUrl(videoUrl)) {
+      throw new Error('The first comment must contain a long YouTube video URL');
     }
     if (!media?.id || !media?.path) throw new Error('A saved Postiz media object is required');
     const ids = deterministicPostIds(marker);
@@ -243,6 +259,11 @@ export class PostizLocalClient {
       throw new PostizClientError('Postiz draft creation returned an invalid response', {
         code: 'draft_create_invalid',
         transient: true,
+      });
+    }
+    if (created[0].postId !== ids.rootId) {
+      throw new PostizClientError('Postiz did not preserve the requested draft identifier', {
+        code: 'draft_idempotency_mismatch',
       });
     }
     return { postId: ids.rootId, commentId: ids.commentId };

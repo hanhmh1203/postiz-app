@@ -47,6 +47,8 @@ test('builds a Vietnamese-aware social content prompt', () => {
   assert.match(prompt, /company voice/i);
   assert.match(prompt, /image prompt/i);
   assert.match(prompt, /Giới thiệu một ứng dụng/);
+  assert.match(prompt, /numeric.*length.*highest priority/i);
+  assert.match(prompt, /count.*characters/i);
 });
 
 test('builds a non-interactive read-only Codex command', () => {

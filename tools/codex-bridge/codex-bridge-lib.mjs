@@ -62,6 +62,7 @@ Write in the same language as the user's brief unless the user explicitly asks f
 Return only the JSON object required by the provided schema.
 
 Requirements:
+- Treat every explicit numeric length constraint in the user brief as the highest priority. Count all characters in the hook, body, and hashtags before returning the response.
 - Write a distinct 1-2 sentence hook that is not repeated in the content body.
 - Do not add hashtags unless the user asks for them.
 - Keep the writing clear, natural, engaging, and free of generic hype.
