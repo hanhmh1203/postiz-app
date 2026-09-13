@@ -43,7 +43,7 @@ No option may select `now` or `schedule`. The Postiz client always sends `type: 
 
 ### Portal reader
 
-The portal reader opens the configured `book_library` database in read-only mode. It selects productions with status `youtube_uploaded`, resolves their local edition/book paths, upload time, manifest path, and long-video URL, and keeps only records whose resolved project directory is inside the requested batch root. When a stored workflow path is stale or belongs to an earlier machine layout, the reader may remap it to a directory inside the batch root only when exactly one directory slug matches the normalized Vietnamese book title. Ambiguous matches are skipped instead of guessed.
+The portal reader opens the configured `book_library` database in read-only mode. It selects productions with status `youtube_uploaded`, resolves their local edition/book paths, upload time, manifest path, and long-video URL, and keeps only records whose resolved project directory is inside the requested batch root. When a stored workflow path is stale or belongs to an earlier machine layout, the reader may remap it only to one unique directory inside the batch root. The ranked matches are an exact normalized Vietnamese title slug, an exact prior workflow slug, a title slug with an author suffix, or a shorter/longer prior workflow prefix. Ambiguous matches are skipped instead of guessed, and one resource directory can supply only one portal production per run.
 
 It does not update portal metadata. Records are ordered by `youtube_uploaded_at` ascending, with stable book identity as the tie-breaker, so older uploaded reviews are drafted first.
 

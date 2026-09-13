@@ -186,6 +186,48 @@ test('remaps a stale portal workflow path to one exact title slug inside the bat
   assert.equal(candidates[0].workflowDirectory, await realpath(mapped));
 });
 
+test('remaps a title slug to a unique resource directory with an author suffix', async () => {
+  const root = await makeTempDirectory();
+  const mapped = path.join(root, 'dam-nghi-lon-david-schwartz');
+  await mkdir(mapped);
+  const databasePath = path.join(root, 'library.sqlite3');
+
+  createPortalDatabase(databasePath, [
+    {
+      bookId: 'book-1',
+      productionId: 'production-1',
+      title: 'Dám Nghĩ Lớn',
+      workflowDirectory: '/old-machine/books/unrelated-old-folder',
+      youtubeUploadedAt: '2026-01-01T00:00:00.000Z',
+      videoUrl: 'https://youtu.be/abc123',
+    },
+  ]);
+
+  const candidates = await discoverPortalCandidates({ databasePath, batchRoot: root });
+  assert.equal(candidates[0]?.workflowDirectory, await realpath(mapped));
+});
+
+test('remaps a verbose stale workflow slug to one shorter resource directory', async () => {
+  const root = await makeTempDirectory();
+  const mapped = path.join(root, 'chu-nghia-khac-ky');
+  await mkdir(mapped);
+  const databasePath = path.join(root, 'library.sqlite3');
+
+  createPortalDatabase(databasePath, [
+    {
+      bookId: 'book-1',
+      productionId: 'production-1',
+      title: 'Một tiêu đề portal không đồng nhất',
+      workflowDirectory: '/old-machine/books/chu-nghia-khac-ky-phong-cach-song-ban-linh',
+      youtubeUploadedAt: '2026-01-01T00:00:00.000Z',
+      videoUrl: 'https://www.youtube.com/watch?v=abc123',
+    },
+  ]);
+
+  const candidates = await discoverPortalCandidates({ databasePath, batchRoot: root });
+  assert.equal(candidates[0]?.workflowDirectory, await realpath(mapped));
+});
+
 test('does not guess when a title slug maps to more than one resource directory', async () => {
   const root = await makeTempDirectory();
   await Promise.all([
@@ -206,6 +248,33 @@ test('does not guess when a title slug maps to more than one resource directory'
   ]);
 
   assert.deepEqual(await discoverPortalCandidates({ databasePath, batchRoot: root }), []);
+});
+
+test('uses a remapped resource directory for only one portal production', async () => {
+  const root = await makeTempDirectory();
+  await mkdir(path.join(root, 'chu-nghia-khac-ky'));
+  const databasePath = path.join(root, 'library.sqlite3');
+  createPortalDatabase(databasePath, [
+    {
+      bookId: 'older-book',
+      productionId: 'older-production',
+      title: 'Chủ nghĩa khắc kỷ bản lĩnh',
+      workflowDirectory: '/old/books/chu-nghia-khac-ky-ban-linh',
+      youtubeUploadedAt: '2026-01-01T00:00:00.000Z',
+      videoUrl: 'https://youtu.be/older123',
+    },
+    {
+      bookId: 'newer-book',
+      productionId: 'newer-production',
+      title: 'Chủ nghĩa khắc kỷ bình an',
+      workflowDirectory: '/old/books/chu-nghia-khac-ky-binh-an',
+      youtubeUploadedAt: '2026-02-01T00:00:00.000Z',
+      videoUrl: 'https://youtu.be/newer123',
+    },
+  ]);
+
+  const candidates = await discoverPortalCandidates({ databasePath, batchRoot: root });
+  assert.deepEqual(candidates.map(({ productionId }) => productionId), ['older-production']);
 });
 
 test('computes stable source checksums and classifies duplicate and changed sources', async () => {

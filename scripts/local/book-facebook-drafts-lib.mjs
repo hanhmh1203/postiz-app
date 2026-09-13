@@ -98,6 +98,33 @@ async function indexDirectoriesBySlug(root) {
   return directories;
 }
 
+function uniqueDirectoryMatching(directoriesBySlug, predicate) {
+  const matches = new Set();
+  for (const [slug, directories] of directoriesBySlug) {
+    if (!predicate(slug)) continue;
+    for (const directory of directories) matches.add(directory);
+  }
+  return matches.size === 1 ? [...matches][0] : null;
+}
+
+function remapWorkflowDirectory(row, directoriesBySlug) {
+  const titleSlug = toDirectorySlug(row.title);
+  const workflowSlug = toDirectorySlug(path.basename(String(row.workflowDirectory || '')));
+  const strategies = [
+    (slug) => slug === titleSlug,
+    (slug) => workflowSlug && slug === workflowSlug,
+    (slug) => titleSlug.length >= 5 && slug.startsWith(`${titleSlug}-`),
+    (slug) =>
+      workflowSlug.length >= 5 &&
+      (slug.startsWith(`${workflowSlug}-`) || workflowSlug.startsWith(`${slug}-`)),
+  ];
+  for (const strategy of strategies) {
+    const match = uniqueDirectoryMatching(directoriesBySlug, strategy);
+    if (match) return match;
+  }
+  return null;
+}
+
 export async function selectLatestReview(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const candidates = [];
@@ -147,6 +174,7 @@ export async function discoverPortalCandidates({ databasePath, batchRoot }) {
 
     const candidates = [];
     const seenProductions = new Set();
+    const seenDirectories = new Set();
     for (const row of rows) {
       if (seenProductions.has(row.productionId) || !isLongYoutubeUrl(row.videoUrl)) continue;
       let resolvedDirectory;
@@ -156,11 +184,12 @@ export async function discoverPortalCandidates({ databasePath, batchRoot }) {
         resolvedDirectory = null;
       }
       if (!resolvedDirectory || !isPathInside(resolvedRoot, resolvedDirectory)) {
-        const matches = directoriesBySlug.get(toDirectorySlug(row.title)) || [];
-        if (matches.length !== 1) continue;
-        [resolvedDirectory] = matches;
+        resolvedDirectory = remapWorkflowDirectory(row, directoriesBySlug);
+        if (!resolvedDirectory) continue;
       }
+      if (seenDirectories.has(resolvedDirectory)) continue;
       seenProductions.add(row.productionId);
+      seenDirectories.add(resolvedDirectory);
       candidates.push({
         bookId: String(row.bookId),
         productionId: String(row.productionId),
