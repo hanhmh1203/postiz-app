@@ -15,6 +15,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import {
   classifyCandidate,
+  computeIdeaChecksum,
   computeShortChecksum,
   computeSourceChecksum,
   discoverPortalCandidates,
@@ -23,9 +24,11 @@ import {
   isLongYoutubeUrl,
   isPathInside,
   loadState,
+  loadIdeaArtifact,
   parseBatchArgs,
   selectLatestReview,
   writeRunArtifacts,
+  writeIdeaArtifact,
 } from './book-facebook-drafts-lib.mjs';
 
 async function makeTempDirectory() {
@@ -501,6 +504,83 @@ test('classifies review and Short state independently and hashes Short content',
   assert.notEqual(
     checksum,
     await computeShortChecksum(candidate, short, PAGE_NAME, 'short-v1')
+  );
+});
+
+test('classifies numbered idea drafts independently', () => {
+  const candidate = { bookId: 'book-1' };
+  const state = {
+    entries: [
+      {
+        bookId: 'book-1',
+        variant: 'idea',
+        ideaNumber: 1,
+        checksum: 'idea-one',
+      },
+    ],
+  };
+
+  assert.equal(
+    classifyCandidate(candidate, state, 'idea-one', {
+      variant: 'idea',
+      ideaNumber: 1,
+    }),
+    'skipped'
+  );
+  assert.equal(
+    classifyCandidate(candidate, state, 'idea-two', {
+      variant: 'idea',
+      ideaNumber: 2,
+    }),
+    'new'
+  );
+});
+
+test('computes stable idea checksums and round-trips a generated artifact', async () => {
+  const directory = await makeTempDirectory();
+  const artifactPath = path.join(directory, 'generated', 'ideas.json');
+  const ideas = Array.from({ length: 10 }, (_, index) => ({
+    ideaNumber: index + 1,
+    content: `Nội dung ý tưởng ${index + 1}`,
+  }));
+  const artifact = {
+    version: 1,
+    sourceChecksum: 'source-checksum',
+    bookId: 'book-1',
+    createdAt: '2026-09-14T00:00:00.000Z',
+    ideas: ideas.map((idea) => ({
+      ...idea,
+      checksum: computeIdeaChecksum(
+        'source-checksum',
+        idea.ideaNumber,
+        idea.content
+      ),
+    })),
+  };
+
+  assert.equal(
+    artifact.ideas[0].checksum,
+    computeIdeaChecksum('source-checksum', 1, 'Nội dung ý tưởng 1')
+  );
+  assert.notEqual(
+    artifact.ideas[0].checksum,
+    computeIdeaChecksum('source-checksum', 2, 'Nội dung ý tưởng 1')
+  );
+
+  await writeIdeaArtifact(artifactPath, artifact);
+  assert.deepEqual(
+    await loadIdeaArtifact(artifactPath, {
+      sourceChecksum: 'source-checksum',
+      count: 10,
+    }),
+    artifact
+  );
+  assert.equal(
+    await loadIdeaArtifact(artifactPath, {
+      sourceChecksum: 'changed-source',
+      count: 10,
+    }),
+    null
   );
 });
 

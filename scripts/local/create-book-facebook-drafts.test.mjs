@@ -24,6 +24,12 @@ function validCaption(title) {
   return `${sentences}\n\nXem phần review đầy đủ trong bình luận.\n\n#WillReadBook #ReviewSach #SachHay`;
 }
 
+function validIdeaPost(title, ideaNumber) {
+  return `${title} — ý ${ideaNumber}: ${'Một chi tiết có căn cứ trong review giúp người đọc nhìn lại lựa chọn và tìm một cách áp dụng cụ thể vào đời sống hằng ngày. '.repeat(
+    4
+  )}Xem review đầy đủ trong bình luận.\n\n#WillReadBook #ReviewSach #SachHay`;
+}
+
 async function createBook(root, name, { review = true, image = true } = {}) {
   const directory = path.join(root, name);
   await mkdir(directory, { recursive: true });
@@ -91,6 +97,7 @@ function createFakeClient({
   generationFailures = new Map(),
   draftFailures = new Map(),
   shortDraftFailures = new Map(),
+  ideaDraftFailures = new Map(),
 } = {}) {
   const calls = {
     login: 0,
@@ -99,6 +106,8 @@ function createFakeClient({
     upload: [],
     draft: [],
     shortDraft: [],
+    generateIdeas: [],
+    ideaDraft: [],
   };
   return {
     calls,
@@ -115,6 +124,12 @@ function createFakeClient({
       const failures = generationFailures.get(candidate.title) || [];
       if (failures.length) throw failures.shift();
       return validCaption(candidate.title);
+    },
+    async generateIdeaPosts(candidate) {
+      calls.generateIdeas.push(candidate.title);
+      return Array.from({ length: 10 }, (_, index) =>
+        validIdeaPost(candidate.title, index + 1)
+      );
     },
     async uploadMedia(imagePath) {
       calls.upload.push(imagePath);
@@ -139,6 +154,15 @@ function createFakeClient({
       return {
         postId: `short-draft-${calls.shortDraft.length}`,
         commentId: `short-comment-${calls.shortDraft.length}`,
+      };
+    },
+    async createIdeaDraft(input) {
+      calls.ideaDraft.push(input);
+      const failures = ideaDraftFailures.get(input.ideaNumber) || [];
+      if (failures.length) throw failures.shift();
+      return {
+        postId: `idea-draft-${input.ideaNumber}`,
+        commentId: `idea-comment-${input.ideaNumber}`,
       };
     },
     async findDraftByMarker() {
@@ -192,6 +216,7 @@ test('dry-run generates a preview without uploading media, creating a draft, or 
     discoverCandidates: async () => [candidate],
     now: () => new Date('2026-09-13T12:00:00.000Z'),
     retryDelayMs: 0,
+    ideaCount: 0,
   });
 
   assert.equal(report.created.length, 1);
@@ -225,6 +250,7 @@ test('skips invalid resources and keeps scanning until the success limit is reac
     discoverCandidates: async () => candidates,
     now: () => new Date('2026-09-13T12:00:00.000Z'),
     retryDelayMs: 0,
+    ideaCount: 0,
   });
 
   assert.deepEqual(
@@ -264,6 +290,7 @@ test('reports changed sources without generating a duplicate draft', async () =>
     discoverCandidates: async () => [candidate],
     now: () => new Date('2026-09-13T12:00:00.000Z'),
     retryDelayMs: 0,
+    ideaCount: 0,
   });
 
   assert.equal(report.sourceChanged.length, 1);
@@ -295,6 +322,7 @@ test('records a failed book and continues to the next valid book', async () => {
     discoverCandidates: async () => [first, second],
     now: () => new Date('2026-09-13T12:00:00.000Z'),
     retryDelayMs: 0,
+    ideaCount: 0,
   });
 
   assert.equal(report.failed.length, 1);
@@ -328,6 +356,7 @@ test('does not write completed state when draft creation fails', async () => {
     discoverCandidates: async () => [candidate],
     now: () => new Date('2026-09-13T12:00:00.000Z'),
     retryDelayMs: 0,
+    ideaCount: 0,
   });
 
   assert.equal(report.failed.length, 1);
@@ -383,6 +412,7 @@ test('creates missing Short drafts when the review is already in state', async (
     discoverCandidates: async () => [candidate],
     now: () => new Date('2026-09-13T12:00:00.000Z'),
     retryDelayMs: 0,
+    ideaCount: 0,
   });
 
   assert.equal(client.calls.generate.length, 0);
@@ -432,6 +462,7 @@ test('skips one incomplete Short and continues other Shorts and books', async ()
     discoverCandidates: async () => [first, second],
     now: () => new Date('2026-09-13T12:00:00.000Z'),
     retryDelayMs: 0,
+    ideaCount: 0,
   });
 
   assert.equal(
@@ -478,10 +509,154 @@ test('records one Short failure and still creates later Shorts from the same boo
     discoverCandidates: async () => [candidate],
     now: () => new Date('2026-09-13T12:00:00.000Z'),
     retryDelayMs: 0,
+    ideaCount: 0,
   });
 
   assert.equal(report.failed[0].shortName, 'short_01_broken');
   assert.equal(report.failed[0].reason, 'short_draft_failed');
   assert.equal(report.created[0].shortName, 'short_02_ready');
   assert.equal(client.calls.shortDraft.length, 2);
+});
+
+test('creates ten numbered idea drafts with one shared land image upload', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'book-draft-ideas-'));
+  const outputDirectory = path.join(root, 'outputs');
+  const candidate = await createBook(root, 'BookOne');
+  const client = createFakeClient();
+
+  const report = await runBookFacebookDraftBatch({
+    databasePath: path.join(root, 'unused.sqlite3'),
+    batchRoot: root,
+    outputDirectory,
+    pageName: PAGE_NAME,
+    limit: 1,
+    client,
+    discoverCandidates: async () => [candidate],
+    now: () => new Date('2026-09-14T12:00:00.000Z'),
+    retryDelayMs: 0,
+  });
+
+  assert.equal(client.calls.generateIdeas.length, 1);
+  assert.equal(client.calls.ideaDraft.length, 10);
+  assert.equal(client.calls.upload.length, 1);
+  assert.deepEqual(
+    report.created
+      .filter(({ variant }) => variant === 'idea')
+      .map(({ ideaNumber }) => ideaNumber),
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  );
+  for (const input of client.calls.ideaDraft) {
+    assert.match(input.comment, /https:\/\/youtu\.be\/BookOne$/);
+    assert.equal(input.media.id, 'media-1');
+  }
+  const state = JSON.parse(
+    await readFile(path.join(outputDirectory, 'state.json'), 'utf8')
+  );
+  assert.equal(state.entries.length, 11);
+  assert.equal(
+    state.entries.filter(({ variant }) => variant === 'idea').length,
+    10
+  );
+  const artifactPath = report.created.find(
+    ({ variant }) => variant === 'idea'
+  ).ideaArtifactPath;
+  const artifact = JSON.parse(await readFile(artifactPath, 'utf8'));
+  assert.equal(artifact.ideas.length, 10);
+});
+
+test('reruns without regenerating or duplicating current idea drafts', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'book-draft-idea-rerun-'));
+  const outputDirectory = path.join(root, 'outputs');
+  const candidate = await createBook(root, 'BookOne');
+  const client = createFakeClient();
+  const input = {
+    databasePath: path.join(root, 'unused.sqlite3'),
+    batchRoot: root,
+    outputDirectory,
+    pageName: PAGE_NAME,
+    limit: 1,
+    client,
+    discoverCandidates: async () => [candidate],
+    now: () => new Date('2026-09-14T12:00:00.000Z'),
+    retryDelayMs: 0,
+  };
+
+  await runBookFacebookDraftBatch(input);
+  const second = await runBookFacebookDraftBatch(input);
+
+  assert.equal(second.created.length, 0);
+  assert.equal(
+    second.skipped.filter(({ variant }) => variant === 'idea').length,
+    10
+  );
+  assert.equal(client.calls.generateIdeas.length, 1);
+  assert.equal(client.calls.ideaDraft.length, 10);
+});
+
+test('persists generated ideas and resumes only a failed numbered draft', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'book-draft-idea-resume-'));
+  const outputDirectory = path.join(root, 'outputs');
+  const candidate = await createBook(root, 'BookOne');
+  const failure = Object.assign(new Error('idea draft failed'), {
+    code: 'idea_draft_failed',
+    transient: false,
+  });
+  const client = createFakeClient({
+    ideaDraftFailures: new Map([[3, [failure]]]),
+  });
+  const input = {
+    databasePath: path.join(root, 'unused.sqlite3'),
+    batchRoot: root,
+    outputDirectory,
+    pageName: PAGE_NAME,
+    limit: 1,
+    client,
+    discoverCandidates: async () => [candidate],
+    now: () => new Date('2026-09-14T12:00:00.000Z'),
+    retryDelayMs: 0,
+  };
+
+  const first = await runBookFacebookDraftBatch(input);
+  assert.equal(first.failed[0].ideaNumber, 3);
+  assert.equal(
+    first.created.filter(({ variant }) => variant === 'idea').length,
+    9
+  );
+
+  const second = await runBookFacebookDraftBatch(input);
+  assert.deepEqual(
+    second.created
+      .filter(({ variant }) => variant === 'idea')
+      .map(({ ideaNumber }) => ideaNumber),
+    [3]
+  );
+  assert.equal(client.calls.generateIdeas.length, 1);
+  assert.equal(client.calls.ideaDraft.length, 11);
+});
+
+test('dry-run writes ten idea previews without creating Postiz drafts or state', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'book-draft-idea-preview-'));
+  const outputDirectory = path.join(root, 'outputs');
+  const candidate = await createBook(root, 'BookOne');
+  const client = createFakeClient();
+
+  const report = await runBookFacebookDraftBatch({
+    databasePath: path.join(root, 'unused.sqlite3'),
+    batchRoot: root,
+    outputDirectory,
+    pageName: PAGE_NAME,
+    limit: 1,
+    dryRun: true,
+    client,
+    discoverCandidates: async () => [candidate],
+    now: () => new Date('2026-09-14T12:00:00.000Z'),
+    retryDelayMs: 0,
+  });
+
+  const ideas = report.created.filter(({ variant }) => variant === 'idea');
+  assert.equal(ideas.length, 10);
+  await Promise.all(ideas.map(({ previewPath }) => access(previewPath)));
+  assert.equal(client.calls.upload.length, 0);
+  assert.equal(client.calls.ideaDraft.length, 0);
+  await assert.rejects(access(path.join(outputDirectory, 'state.json')));
 });

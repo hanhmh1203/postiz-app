@@ -6,14 +6,17 @@ import { pathToFileURL } from 'node:url';
 
 import {
   classifyCandidate,
+  computeIdeaChecksum,
   computeShortChecksum,
   computeSourceChecksum,
   discoverPortalCandidates,
   discoverShortResources,
+  loadIdeaArtifact,
   loadState,
   parseBatchArgs,
   selectLatestReview,
   writeRunArtifacts,
+  writeIdeaArtifact,
   writeState,
 } from './book-facebook-drafts-lib.mjs';
 import {
@@ -23,6 +26,8 @@ import {
 
 export const TEMPLATE_VERSION = 'book-facebook-v1';
 export const SHORT_TEMPLATE_VERSION = 'book-facebook-short-v1';
+export const IDEA_TEMPLATE_VERSION = 'book-facebook-idea-v1';
+export const IDEA_COUNT = 10;
 export const DEFAULT_PAGE_NAME = 'Vì cuộc sống là ko chờ đợi';
 const COMMENT_PREFIX = 'Để nghe review trọn vẹn, bạn xem tại đây: ';
 
@@ -79,11 +84,17 @@ async function writePreview({
   mediaPath,
   variant,
   shortName,
+  ideaNumber,
 }) {
   const previewDirectory = path.join(outputDirectory, 'previews', runId);
   await mkdir(previewDirectory, { recursive: true });
   const safeName = candidate.bookId.replace(/[^A-Za-z0-9_-]+/g, '_');
-  const suffix = variant === 'short' ? `-short-${shortName}` : '-review';
+  const suffix =
+    variant === 'short'
+      ? `-short-${shortName}`
+      : variant === 'idea'
+      ? `-idea-${String(ideaNumber).padStart(2, '0')}`
+      : '-review';
   const previewPath = path.join(previewDirectory, `${safeName}${suffix}.md`);
   const text = `# ${candidate.title}
 
@@ -114,10 +125,14 @@ export async function runBookFacebookDraftBatch({
   discoverCandidates = discoverPortalCandidates,
   now = () => new Date(),
   retryDelayMs = 250,
+  ideaCount = IDEA_COUNT,
 }) {
   if (!client) throw new Error('A Postiz client is required');
   if (!Number.isInteger(limit) || limit < 1 || limit > 10) {
     throw new Error('Batch limit must be an integer from 1 through 10');
+  }
+  if (ideaCount !== 0 && ideaCount !== IDEA_COUNT) {
+    throw new Error(`Idea count must be either 0 or ${IDEA_COUNT}`);
   }
   await mkdir(outputDirectory, { recursive: true });
   const statePath = path.join(outputDirectory, 'state.json');
@@ -133,18 +148,32 @@ export async function runBookFacebookDraftBatch({
   for (const rawCandidate of candidates) {
     if (createdBooks.size >= limit) break;
     let bookCreated = false;
+    let reviewResources;
+    let landMedia;
+    const getLandMedia = async (imagePath) => {
+      if (landMedia) return landMedia;
+      landMedia = await retryTransient(() => client.uploadMedia(imagePath), {
+        retries: 2,
+        delayMs: retryDelayMs,
+      });
+      return landMedia;
+    };
 
     try {
-      const resources = await validateReviewResources(rawCandidate);
-      if (resources.reason) {
+      reviewResources = await validateReviewResources(rawCandidate);
+      if (reviewResources.reason) {
         report.skipped.push({
           ...rawCandidate,
           variant: 'review',
           status: 'skipped',
-          reason: resources.reason,
+          reason: reviewResources.reason,
         });
       } else {
-        const candidate = { ...rawCandidate, ...resources, variant: 'review' };
+        const candidate = {
+          ...rawCandidate,
+          ...reviewResources,
+          variant: 'review',
+        };
         const checksum = await computeSourceChecksum(
           candidate,
           pageName,
@@ -196,13 +225,7 @@ export async function runBookFacebookDraftBatch({
               previewPath,
             });
           } else {
-            const media = await retryTransient(
-              () => client.uploadMedia(candidate.imagePath),
-              {
-                retries: 2,
-                delayMs: retryDelayMs,
-              }
-            );
+            const media = await getLandMedia(candidate.imagePath);
             let draft;
             try {
               draft = await retryTransient(
@@ -258,6 +281,238 @@ export async function runBookFacebookDraftBatch({
         status: 'failed',
         reason: safeErrorCode(error),
       });
+    }
+
+    if (ideaCount > 0) {
+      if (reviewResources?.reason || !reviewResources) {
+        report.skipped.push({
+          ...rawCandidate,
+          variant: 'idea',
+          status: 'skipped',
+          reason: reviewResources?.reason || 'review_resources_unavailable',
+        });
+      } else {
+        const candidate = {
+          ...rawCandidate,
+          ...reviewResources,
+          variant: 'idea',
+        };
+        try {
+          const sourceChecksum = await computeSourceChecksum(
+            candidate,
+            pageName,
+            IDEA_TEMPLATE_VERSION
+          );
+          const pendingNumbers = [];
+          for (let ideaNumber = 1; ideaNumber <= ideaCount; ideaNumber += 1) {
+            const existing = state.entries.find(
+              (entry) =>
+                entry.bookId === candidate.bookId &&
+                entry.variant === 'idea' &&
+                entry.ideaNumber === ideaNumber
+            );
+            if (!existing) {
+              pendingNumbers.push(ideaNumber);
+              continue;
+            }
+            const entry = {
+              ...candidate,
+              ideaNumber,
+              checksum: existing.checksum,
+              sourceChecksum,
+            };
+            if (existing.sourceChecksum === sourceChecksum) {
+              report.skipped.push({
+                ...entry,
+                status: 'skipped',
+                reason: 'already_drafted',
+              });
+            } else {
+              report.sourceChanged.push({
+                ...entry,
+                status: 'source_changed',
+                reason: 'source_changed',
+              });
+            }
+          }
+
+          if (pendingNumbers.length > 0) {
+            const safeBookId = candidate.bookId.replace(
+              /[^A-Za-z0-9_-]+/g,
+              '_'
+            );
+            const ideaArtifactPath = path.join(
+              outputDirectory,
+              'generated-ideas',
+              safeBookId,
+              `${sourceChecksum}.json`
+            );
+            let artifact = await loadIdeaArtifact(ideaArtifactPath, {
+              sourceChecksum,
+              count: ideaCount,
+            });
+            if (!artifact) {
+              const generated = await retryTransient(
+                () =>
+                  client.generateIdeaPosts({
+                    title: candidate.title,
+                    review: candidate.review,
+                  }),
+                { retries: 2, delayMs: retryDelayMs }
+              );
+              if (
+                !Array.isArray(generated) ||
+                generated.length !== ideaCount ||
+                generated.some((content) => typeof content !== 'string')
+              ) {
+                throw Object.assign(
+                  new Error('Idea generator returned an invalid item set'),
+                  { code: 'generator_content_invalid', transient: true }
+                );
+              }
+              artifact = {
+                version: 1,
+                sourceChecksum,
+                bookId: candidate.bookId,
+                createdAt: now().toISOString(),
+                ideas: generated.map((content, index) => ({
+                  ideaNumber: index + 1,
+                  content,
+                  checksum: computeIdeaChecksum(
+                    sourceChecksum,
+                    index + 1,
+                    content
+                  ),
+                })),
+              };
+              await writeIdeaArtifact(ideaArtifactPath, artifact);
+            }
+
+            for (const ideaNumber of pendingNumbers) {
+              const idea = artifact.ideas[ideaNumber - 1];
+              const ideaCandidate = {
+                ...candidate,
+                ideaNumber,
+                checksum: idea.checksum,
+                sourceChecksum,
+                ideaArtifactPath,
+              };
+              try {
+                const classification = classifyCandidate(
+                  candidate,
+                  state,
+                  idea.checksum,
+                  { variant: 'idea', ideaNumber }
+                );
+                if (classification !== 'new') {
+                  const target =
+                    classification === 'skipped'
+                      ? report.skipped
+                      : report.sourceChanged;
+                  target.push({
+                    ...ideaCandidate,
+                    status:
+                      classification === 'skipped'
+                        ? 'skipped'
+                        : 'source_changed',
+                    reason:
+                      classification === 'skipped'
+                        ? 'already_drafted'
+                        : 'source_changed',
+                  });
+                  continue;
+                }
+
+                const comment = `${COMMENT_PREFIX}${candidate.videoUrl}`;
+                const marker = `wrb:${candidate.bookId}:idea:${ideaNumber}:${idea.checksum}`;
+                if (dryRun) {
+                  const previewPath = await writePreview({
+                    outputDirectory,
+                    runId,
+                    candidate: ideaCandidate,
+                    content: idea.content,
+                    comment,
+                    mediaPath: candidate.imagePath,
+                    variant: 'idea',
+                    ideaNumber,
+                  });
+                  report.created.push({
+                    ...ideaCandidate,
+                    status: 'dry_run',
+                    previewPath,
+                  });
+                } else {
+                  const media = await getLandMedia(candidate.imagePath);
+                  let draft;
+                  try {
+                    draft = await retryTransient(
+                      () =>
+                        client.createIdeaDraft({
+                          integrationId: integration.id,
+                          content: idea.content,
+                          comment,
+                          media,
+                          marker,
+                          ideaNumber,
+                        }),
+                      { retries: 2, delayMs: retryDelayMs }
+                    );
+                  } catch (error) {
+                    const existing = await client
+                      .findDraftByMarker(marker)
+                      .catch(() => null);
+                    if (!existing) throw error;
+                    draft = existing;
+                  }
+                  state.entries.push({
+                    variant: 'idea',
+                    ideaNumber,
+                    bookId: candidate.bookId,
+                    productionId: candidate.productionId,
+                    checksum: idea.checksum,
+                    sourceChecksum,
+                    pageName,
+                    postId: draft.postId,
+                    commentId: draft.commentId,
+                    reviewPath: candidate.reviewPath,
+                    imagePath: candidate.imagePath,
+                    videoUrl: candidate.videoUrl,
+                    ideaArtifactPath,
+                    createdAt: now().toISOString(),
+                    templateVersion: IDEA_TEMPLATE_VERSION,
+                  });
+                  await writeState(statePath, state);
+                  report.created.push({
+                    ...ideaCandidate,
+                    status: 'created',
+                    draftId: draft.postId,
+                  });
+                }
+                bookCreated = true;
+              } catch (error) {
+                report.failed.push({
+                  bookId: candidate.bookId,
+                  productionId: candidate.productionId,
+                  title: candidate.title,
+                  variant: 'idea',
+                  ideaNumber,
+                  status: 'failed',
+                  reason: safeErrorCode(error),
+                });
+              }
+            }
+          }
+        } catch (error) {
+          report.failed.push({
+            bookId: candidate.bookId,
+            productionId: candidate.productionId,
+            title: candidate.title,
+            variant: 'idea',
+            status: 'failed',
+            reason: safeErrorCode(error),
+          });
+        }
+      }
     }
 
     let shorts;

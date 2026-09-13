@@ -7,10 +7,12 @@ import test from 'node:test';
 
 import {
   PostizLocalClient,
+  buildFacebookIdeaBatchBrief,
   buildFacebookResearchBrief,
   deterministicPostIds,
   readPostizCredentials,
   validateFacebookCaption,
+  validateFacebookIdeaPost,
 } from './postiz-local-client.mjs';
 
 async function requestBody(request) {
@@ -52,6 +54,25 @@ function validGeneratedOutput() {
     category: 'Sách',
     topic: 'Review sách',
     date: '2026-09-13T00:00:00.000Z',
+  };
+}
+
+function validIdeaPost(number) {
+  const body = `Ý tưởng ${number}: ${'Một chi tiết trong cuốn sách gợi ra cách nhìn cụ thể để người đọc suy nghĩ lại về lựa chọn và hành động hằng ngày. '.repeat(
+    4
+  )}`;
+  return `${body}Xem review đầy đủ ở bình luận.\n\n#WillReadBook #ReviewSach #SachHay`;
+}
+
+function validIdeaGeneratedOutput(count = 10) {
+  return {
+    hook: 'Metadata only',
+    content: Array.from({ length: count }, (_, index) => ({
+      content: validIdeaPost(index + 1),
+    })),
+    category: 'Sách',
+    topic: 'Ý tưởng từ sách',
+    date: '2026-09-14T00:00:00.000Z',
   };
 }
 
@@ -321,6 +342,157 @@ test('marks invalid generated captions as transient so the batch can retry', asy
   }
 });
 
+test('generates exactly ten standalone Facebook idea posts through Postiz', async () => {
+  let generatorBody;
+  const server = await startServer(async (request, response) => {
+    if (request.url === '/api/auth/login') {
+      await requestBody(request);
+      response.setHeader('auth', 'jwt-value');
+      response.end('{}');
+      return;
+    }
+    generatorBody = JSON.parse((await requestBody(request)).toString());
+    response.end(
+      `${JSON.stringify({
+        name: 'codex-complete',
+        data: { output: validIdeaGeneratedOutput() },
+      })}\n`
+    );
+  });
+  try {
+    const client = new PostizLocalClient({
+      baseUrl: server.baseUrl,
+      credentials: { email: 'a@b.com', password: 'secret' },
+    });
+    await client.login();
+    const ideas = await client.generateIdeaPosts({
+      title: 'Tên sách',
+      review: 'Review nguồn đủ dài.',
+    });
+
+    assert.equal(generatorBody.format, 'thread_long');
+    assert.equal(generatorBody.tone, 'personal');
+    assert.match(generatorBody.research, /chính xác 10/i);
+    assert.equal(ideas.length, 10);
+    ideas.forEach((idea) =>
+      assert.doesNotThrow(() => validateFacebookIdeaPost(idea))
+    );
+  } finally {
+    await server.close();
+  }
+});
+
+test('marks an incomplete idea set as transient generator content', async () => {
+  const server = await startServer(async (request, response) => {
+    if (request.url === '/api/auth/login') {
+      await requestBody(request);
+      response.setHeader('auth', 'jwt-value');
+      response.end('{}');
+      return;
+    }
+    await requestBody(request);
+    response.end(
+      `${JSON.stringify({
+        name: 'codex-complete',
+        data: { output: validIdeaGeneratedOutput(9) },
+      })}\n`
+    );
+  });
+  try {
+    const client = new PostizLocalClient({
+      baseUrl: server.baseUrl,
+      credentials: { email: 'a@b.com', password: 'secret' },
+    });
+    await client.login();
+    await assert.rejects(
+      client.generateIdeaPosts({ title: 'Tên sách', review: 'Review nguồn.' }),
+      (error) =>
+        error.code === 'generator_content_invalid' && error.transient === true
+    );
+  } finally {
+    await server.close();
+  }
+});
+
+test('rejects ten duplicate idea posts as invalid generator content', async () => {
+  const duplicateOutput = validIdeaGeneratedOutput();
+  duplicateOutput.content = duplicateOutput.content.map(() => ({
+    content: validIdeaPost(1),
+  }));
+  const server = await startServer(async (request, response) => {
+    if (request.url === '/api/auth/login') {
+      await requestBody(request);
+      response.setHeader('auth', 'jwt-value');
+      response.end('{}');
+      return;
+    }
+    await requestBody(request);
+    response.end(
+      `${JSON.stringify({
+        name: 'codex-complete',
+        data: { output: duplicateOutput },
+      })}\n`
+    );
+  });
+  try {
+    const client = new PostizLocalClient({
+      baseUrl: server.baseUrl,
+      credentials: { email: 'a@b.com', password: 'secret' },
+    });
+    await client.login();
+    await assert.rejects(
+      client.generateIdeaPosts({ title: 'Tên sách', review: 'Review nguồn.' }),
+      (error) => error.code === 'generator_content_invalid'
+    );
+  } finally {
+    await server.close();
+  }
+});
+
+test('creates an image idea draft with its long-review first comment', async () => {
+  let draft;
+  const server = await startServer(async (request, response) => {
+    if (request.url === '/api/auth/login') {
+      await requestBody(request);
+      response.setHeader('auth', 'jwt-value');
+      response.end('{}');
+      return;
+    }
+    if (request.url === '/api/posts') {
+      draft = JSON.parse((await requestBody(request)).toString());
+      response.end(JSON.stringify([{ postId: draft.posts[0].value[0].id }]));
+      return;
+    }
+    response.statusCode = 404;
+    response.end();
+  });
+  try {
+    const client = new PostizLocalClient({
+      baseUrl: server.baseUrl,
+      credentials: { email: 'a@b.com', password: 'secret' },
+    });
+    await client.login();
+    const content = validIdeaPost(1);
+    await client.createIdeaDraft({
+      integrationId: 'page-id',
+      content,
+      comment:
+        'Để nghe review trọn vẹn, bạn xem tại đây: https://youtu.be/abc123',
+      media: { id: 'image-id', path: '/uploads/land.png' },
+      marker: 'wrb:book-1:idea:1:checksum',
+    });
+
+    assert.equal(draft.type, 'draft');
+    assert.equal(draft.posts[0].value[0].content, content);
+    assert.deepEqual(draft.posts[0].value[0].image, [
+      { id: 'image-id', path: '/uploads/land.png' },
+    ]);
+    assert.match(draft.posts[0].value[1].content, /youtu\.be\/abc123$/);
+  } finally {
+    await server.close();
+  }
+});
+
 test('uploads land.png and creates an idempotent draft with a first comment', async () => {
   const received = {};
   const server = await startServer(async (request, response) => {
@@ -539,6 +711,19 @@ test('builds a grounded Vietnamese brief without putting the YouTube URL in it',
     title: 'Tên sách',
     review: 'Nội dung phân tích nguồn.',
   });
+  assert.match(brief, /Tên sách/);
+  assert.match(brief, /Nội dung phân tích nguồn/);
+  assert.match(brief, /#WillReadBook/);
+  assert.doesNotMatch(brief, /youtu/);
+});
+
+test('builds an exact ten-item idea brief grounded in the source review', () => {
+  const brief = buildFacebookIdeaBatchBrief({
+    title: 'Tên sách',
+    review: 'Nội dung phân tích nguồn.',
+  });
+  assert.match(brief, /chính xác 10/i);
+  assert.match(brief, /350.*700/);
   assert.match(brief, /Tên sách/);
   assert.match(brief, /Nội dung phân tích nguồn/);
   assert.match(brief, /#WillReadBook/);

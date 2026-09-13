@@ -409,6 +409,18 @@ export async function computeShortChecksum(
   return hash.digest('hex');
 }
 
+export function computeIdeaChecksum(sourceChecksum, ideaNumber, content) {
+  if (!Number.isInteger(ideaNumber) || ideaNumber < 1) {
+    throw new Error('Idea number must be a positive integer');
+  }
+  const hash = createHash('sha256');
+  for (const value of [sourceChecksum, ideaNumber, content]) {
+    hash.update(String(value));
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
 export function classifyCandidate(
   candidate,
   state,
@@ -419,9 +431,13 @@ export function classifyCandidate(
     if (entry.bookId !== candidate.bookId) return false;
     const entryVariant = entry.variant || 'review';
     if (entryVariant !== identity.variant) return false;
-    return (
-      identity.variant !== 'short' || entry.shortName === identity.shortName
-    );
+    if (identity.variant === 'short') {
+      return entry.shortName === identity.shortName;
+    }
+    if (identity.variant === 'idea') {
+      return entry.ideaNumber === identity.ideaNumber;
+    }
+    return true;
   });
   if (!existing) return 'new';
   return existing.checksum === checksum ? 'skipped' : 'source_changed';
@@ -466,6 +482,44 @@ export async function writeState(statePath, state) {
   await atomicJsonWrite(statePath, state);
 }
 
+export async function loadIdeaArtifact(
+  artifactPath,
+  { sourceChecksum, count }
+) {
+  try {
+    const artifact = JSON.parse(await readFile(artifactPath, 'utf8'));
+    if (
+      artifact?.version !== 1 ||
+      artifact.sourceChecksum !== sourceChecksum ||
+      !Array.isArray(artifact.ideas) ||
+      artifact.ideas.length !== count
+    ) {
+      return null;
+    }
+    const valid = artifact.ideas.every((idea, index) => {
+      if (
+        idea?.ideaNumber !== index + 1 ||
+        typeof idea.content !== 'string' ||
+        typeof idea.checksum !== 'string'
+      ) {
+        return false;
+      }
+      return (
+        idea.checksum ===
+        computeIdeaChecksum(sourceChecksum, idea.ideaNumber, idea.content)
+      );
+    });
+    return valid ? artifact : null;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+export async function writeIdeaArtifact(artifactPath, artifact) {
+  await atomicJsonWrite(artifactPath, artifact);
+}
+
 function safeReportEntry(entry) {
   const allowedKeys = [
     'bookId',
@@ -473,6 +527,7 @@ function safeReportEntry(entry) {
     'variant',
     'shortName',
     'shortNumber',
+    'ideaNumber',
     'title',
     'status',
     'reason',
@@ -485,6 +540,7 @@ function safeReportEntry(entry) {
     'videoUrl',
     'checksum',
     'previewPath',
+    'ideaArtifactPath',
   ];
   return Object.fromEntries(
     allowedKeys

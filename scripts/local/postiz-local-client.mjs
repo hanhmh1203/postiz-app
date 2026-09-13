@@ -70,6 +70,24 @@ Review nguồn:
 ${review}`;
 }
 
+export function buildFacebookIdeaBatchBrief({ title, review }) {
+  return `Từ review nguồn, viết chính xác 10 bài Facebook độc lập bằng tiếng Việt cho cuốn sách “${title}”.
+
+Yêu cầu bắt buộc cho từng phần tử content:
+- Là một bài đăng hoàn chỉnh, không phụ thuộc top-level hook hoặc bài khác.
+- Dài từ 350 đến 700 ký tự, tính cả hashtag.
+- Có câu mở đầu riêng để gợi tò mò.
+- Chỉ khai thác một góc khác nhau: bài học, quan sát, câu hỏi suy ngẫm hoặc ứng dụng thực tế có căn cứ trong review nguồn.
+- Kết bằng lời mời xem review đầy đủ trong bình luận.
+- Không chèn URL, không bịa trích dẫn hoặc dữ kiện, không sao chép đoạn dài.
+- Dùng 3-5 hashtag phù hợp và bắt buộc có #WillReadBook.
+
+Mười bài phải khác nhau rõ ràng về góc tiếp cận. Trả về chính xác 10 phần tử content. Top-level hook chỉ là metadata và sẽ bị bỏ qua.
+
+Review nguồn:
+${review}`;
+}
+
 export function validateFacebookCaption(caption) {
   if (typeof caption !== 'string')
     throw new Error('Facebook caption must be text');
@@ -91,6 +109,56 @@ export function validateFacebookCaption(caption) {
     throw new Error('Facebook caption must contain #WillReadBook');
   }
   return trimmed;
+}
+
+export function validateFacebookIdeaPost(content) {
+  if (typeof content !== 'string') {
+    throw new Error('Facebook idea post must be text');
+  }
+  const trimmed = content.trim();
+  const length = Array.from(trimmed).length;
+  if (length < 350 || length > 700) {
+    throw new Error(
+      `Facebook idea post must contain 350 through 700 characters; received ${length}`
+    );
+  }
+  if (/(?:https?:\/\/|www\.)/i.test(trimmed)) {
+    throw new Error('Facebook idea post must not contain a URL');
+  }
+  const hashtags = trimmed.match(/(?:^|\s)#[\p{L}\p{N}_]+/gu) || [];
+  if (hashtags.length < 3 || hashtags.length > 5) {
+    throw new Error('Facebook idea post must contain 3 through 5 hashtags');
+  }
+  if (!hashtags.some((tag) => tag.trim() === '#WillReadBook')) {
+    throw new Error('Facebook idea post must contain #WillReadBook');
+  }
+  return trimmed;
+}
+
+function parseGeneratorOutput(ndjson) {
+  let output;
+  for (const line of ndjson.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      throw new PostizClientError(
+        'Postiz generator returned malformed NDJSON',
+        {
+          code: 'generator_malformed_response',
+        }
+      );
+    }
+    if (event?.error) {
+      throw new PostizClientError('Postiz generator reported an error', {
+        code: 'generator_error',
+        transient: true,
+      });
+    }
+    if (event?.data?.output) output = event.data.output;
+  }
+  return output;
 }
 
 function authFromSetCookie(response) {
@@ -225,28 +293,7 @@ export class PostizLocalClient {
       timeoutMs: this.generationTimeoutMs,
     });
     const ndjson = await response.text();
-    let output;
-    for (const line of ndjson.split(/\r?\n/)) {
-      if (!line.trim()) continue;
-      let event;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        throw new PostizClientError(
-          'Postiz generator returned malformed NDJSON',
-          {
-            code: 'generator_malformed_response',
-          }
-        );
-      }
-      if (event?.error) {
-        throw new PostizClientError('Postiz generator reported an error', {
-          code: 'generator_error',
-          transient: true,
-        });
-      }
-      if (event?.data?.output) output = event.data.output;
-    }
+    const output = parseGeneratorOutput(ndjson);
     if (
       !output ||
       typeof output.hook !== 'string' ||
@@ -267,6 +314,43 @@ export class PostizLocalClient {
     } catch {
       throw new PostizClientError(
         'Postiz generator returned content outside the Facebook contract',
+        {
+          code: 'generator_content_invalid',
+          transient: true,
+        }
+      );
+    }
+  }
+
+  async generateIdeaPosts({ title, review }) {
+    const response = await this.#fetch('/posts/generator', {
+      method: 'POST',
+      body: JSON.stringify({
+        research: buildFacebookIdeaBatchBrief({ title, review }),
+        format: 'thread_long',
+        tone: 'personal',
+        isPicture: false,
+      }),
+      timeoutMs: this.generationTimeoutMs,
+    });
+    const output = parseGeneratorOutput(await response.text());
+    try {
+      if (!Array.isArray(output?.content) || output.content.length !== 10) {
+        throw new Error('Generator must return exactly ten content items');
+      }
+      const posts = output.content.map((item) =>
+        validateFacebookIdeaPost(item?.content)
+      );
+      const uniquePosts = new Set(
+        posts.map((post) => post.toLocaleLowerCase('vi').replace(/\s+/g, ' '))
+      );
+      if (uniquePosts.size !== posts.length) {
+        throw new Error('Generator returned duplicate idea posts');
+      }
+      return posts;
+    } catch {
+      throw new PostizClientError(
+        'Postiz generator returned an invalid Facebook idea set',
         {
           code: 'generator_content_invalid',
           transient: true,
@@ -316,6 +400,16 @@ export class PostizLocalClient {
     return this.#createMediaDraft({
       integrationId,
       content: validateShortContent(content),
+      comment: validateComment(comment),
+      media,
+      marker,
+    });
+  }
+
+  async createIdeaDraft({ integrationId, content, comment, media, marker }) {
+    return this.#createMediaDraft({
+      integrationId,
+      content: validateFacebookIdeaPost(content),
       comment: validateComment(comment),
       media,
       marker,
