@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-13
 
-**Status:** Approved design, pending user review of the written specification
+**Status:** Implemented and verified locally
 
 **Target Facebook Page:** `Vì cuộc sống là ko chờ đợi`
 
@@ -43,7 +43,7 @@ No option may select `now` or `schedule`. The Postiz client always sends `type: 
 
 ### Portal reader
 
-The portal reader opens the configured `book_library` database in read-only mode. It selects productions with status `youtube_uploaded`, resolves their local edition/book paths, upload time, manifest path, and long-video URL, and keeps only records whose resolved project directory is inside the requested batch root.
+The portal reader opens the configured `book_library` database in read-only mode. It selects productions with status `youtube_uploaded`, resolves their local edition/book paths, upload time, manifest path, and long-video URL, and keeps only records whose resolved project directory is inside the requested batch root. When a stored workflow path is stale or belongs to an earlier machine layout, the reader may remap it to a directory inside the batch root only when exactly one directory slug matches the normalized Vietnamese book title. Ambiguous matches are skipped instead of guessed.
 
 It does not update portal metadata. Records are ordered by `youtube_uploaded_at` ascending, with stable book identity as the tie-breaker, so older uploaded reviews are drafted first.
 
@@ -61,7 +61,7 @@ Skipped candidates do not consume the ten-book success limit. The scan continues
 
 ### Postiz client
 
-The Postiz client authenticates only against the local Postiz deployment using credentials from an ignored local credential file. It performs a preflight check before processing any book:
+The Postiz client authenticates only against the local Postiz deployment using credentials from an ignored local credential file. Requests made through the public local origin use Postiz's `/api` prefix. It performs a preflight check before processing any book:
 
 - Postiz is reachable.
 - The Codex bridge reports healthy and authenticated.
@@ -69,6 +69,8 @@ The Postiz client authenticates only against the local Postiz deployment using c
 - The resolved integration is complete and is not an in-between OAuth record.
 
 The client sends the source review and a fixed Facebook-writing brief through the Postiz generator. It validates the generated response, uploads `land.png` to Postiz media storage, and creates one draft whose first item is the Facebook post and whose second item is the supported Facebook comment. This preserves the comment in Postiz so it is published after the root post when the user later publishes or schedules the draft.
+
+The root post and comment use deterministic UUIDs derived from the local correlation marker. The Postiz repository preserves supplied IDs on create, and the client verifies that the returned root ID matches before writing completed state. This makes a retry observable through `GET /posts/:id` and prevents a lost response from silently producing duplicate drafts.
 
 The client refuses to send a payload unless its type is exactly `draft` and its integration ID matches the preflight result.
 
@@ -106,7 +108,7 @@ State is written only after Postiz confirms the complete draft, media attachment
 
 ## Facebook Content Contract
 
-The generated post is Vietnamese prose between approximately 700 and 1,200 characters. Natural paragraph breaks count toward the target; the limit is a quality target rather than byte truncation.
+The generated post is Vietnamese prose between approximately 700 and 1,200 characters. The generation brief targets 850–1,050 characters to leave room for model variation, while validation enforces the 700–1,200 range. Natural paragraph breaks count toward the target; the limit is a quality target rather than byte truncation.
 
 The content follows this structure:
 
@@ -164,3 +166,7 @@ Contract tests use temporary fixtures and a fake Postiz server to verify generat
 ## Success Criteria
 
 The design is successful when a user can run one Bash wrapper with an absolute batch directory and receive up to ten new Postiz drafts for `Vì cuộc sống là ko chờ đợi`, each containing a grounded Vietnamese review, the correct `land.png`, and a first comment linking to the correct long YouTube review. No post is published automatically, repeat runs do not create duplicates, one bad book does not block valid books, and the final report explains every candidate outcome without exposing secrets.
+
+## Verified Local Result
+
+The integration gate was completed with `Từ tốt đến vĩ đại`. A dry run produced a valid preview from the newest analysis Markdown and the existing `land.png`. The real run created one root post plus one first comment, both in `DRAFT` state, for the configured Facebook integration. API verification confirmed one image, a 1,189-character caption with four hashtags, and the matching long YouTube watch URL in the comment. Repeating the same command created no new draft and reported the book as already drafted.
