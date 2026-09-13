@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+import { computeSourceChecksum } from './book-facebook-drafts-lib.mjs';
+
 import {
   retryTransient,
   runBookFacebookDraftBatch,
@@ -34,8 +36,57 @@ async function createBook(root, name, { review = true, image = true } = {}) {
   };
 }
 
-function createFakeClient({ generationFailures = new Map(), draftFailures = new Map() } = {}) {
-  const calls = { login: 0, preflight: 0, generate: [], upload: [], draft: [] };
+async function addShorts(candidate, definitions) {
+  await writeFile(
+    path.join(candidate.workflowDirectory, 'shorts.txt'),
+    definitions.map(({ name }) => `${name} 15 15`).join('\n')
+  );
+  const metadata = [];
+  for (const definition of definitions) {
+    const shortNumber = definition.name.match(/^short_(\d{2})/)?.[1];
+    if (definition.metadata !== false) {
+      metadata.push(
+        `### Short ${shortNumber} - Test`,
+        '#### Description',
+        definition.description || `Mô tả ${definition.name}`,
+        '#### Hashtag',
+        definition.hashtags || 'Shorts, TomTatSach, WillReadBook',
+        ''
+      );
+    }
+    if (definition.video !== false) {
+      const shortDirectory = path.join(
+        candidate.workflowDirectory,
+        'output',
+        'shorts',
+        definition.name
+      );
+      await mkdir(shortDirectory, { recursive: true });
+      await writeFile(
+        path.join(shortDirectory, `${definition.name}.mp4`),
+        Buffer.from(`video-${definition.name}`)
+      );
+    }
+  }
+  await writeFile(
+    path.join(candidate.workflowDirectory, 'youtube_metadata_short.md'),
+    metadata.join('\n')
+  );
+}
+
+function createFakeClient({
+  generationFailures = new Map(),
+  draftFailures = new Map(),
+  shortDraftFailures = new Map(),
+} = {}) {
+  const calls = {
+    login: 0,
+    preflight: 0,
+    generate: [],
+    upload: [],
+    draft: [],
+    shortDraft: [],
+  };
   return {
     calls,
     async login() { calls.login += 1; },
@@ -52,13 +103,25 @@ function createFakeClient({ generationFailures = new Map(), draftFailures = new 
     },
     async uploadMedia(imagePath) {
       calls.upload.push(imagePath);
-      return { id: `media-${calls.upload.length}`, path: `/uploads/${calls.upload.length}.png` };
+      return {
+        id: `media-${calls.upload.length}`,
+        path: `/uploads/${calls.upload.length}${path.extname(imagePath)}`,
+      };
     },
     async createDraft(input) {
       calls.draft.push(input);
       const failures = draftFailures.get(input.title) || [];
       if (failures.length) throw failures.shift();
       return { postId: `draft-${calls.draft.length}`, commentId: `comment-${calls.draft.length}` };
+    },
+    async createShortDraft(input) {
+      calls.shortDraft.push(input);
+      const failures = shortDraftFailures.get(input.shortName) || [];
+      if (failures.length) throw failures.shift();
+      return {
+        postId: `short-draft-${calls.shortDraft.length}`,
+        commentId: `short-comment-${calls.shortDraft.length}`,
+      };
     },
     async findDraftByMarker() { return null; },
   };
@@ -225,4 +288,132 @@ test('does not write completed state when draft creation fails', async () => {
   assert.equal(report.failed.length, 1);
   const state = JSON.parse(await readFile(path.join(outputDirectory, 'state.json'), 'utf8'));
   assert.equal(state.entries.length, 0);
+});
+
+test('creates missing Short drafts when the review is already in state', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'book-draft-existing-review-'));
+  const outputDirectory = path.join(root, 'outputs');
+  await mkdir(outputDirectory);
+  const candidate = await createBook(root, 'BookOne');
+  await addShorts(candidate, [
+    { name: 'short_01_hook' },
+    { name: 'short_02_lesson' },
+  ]);
+  const reviewCandidate = {
+    ...candidate,
+    reviewPath: path.join(candidate.workflowDirectory, 'BookOne-phan-tich.md'),
+    imagePath: path.join(candidate.workflowDirectory, 'land.png'),
+  };
+  const reviewChecksum = await computeSourceChecksum(
+    reviewCandidate,
+    PAGE_NAME,
+    'book-facebook-v1'
+  );
+  await writeFile(
+    path.join(outputDirectory, 'state.json'),
+    JSON.stringify({
+      version: 2,
+      entries: [{ bookId: candidate.bookId, variant: 'review', checksum: reviewChecksum }],
+    })
+  );
+  const client = createFakeClient();
+
+  const report = await runBookFacebookDraftBatch({
+    databasePath: path.join(root, 'unused.sqlite3'),
+    batchRoot: root,
+    outputDirectory,
+    pageName: PAGE_NAME,
+    limit: 1,
+    client,
+    discoverCandidates: async () => [candidate],
+    now: () => new Date('2026-09-13T12:00:00.000Z'),
+    retryDelayMs: 0,
+  });
+
+  assert.equal(client.calls.generate.length, 0);
+  assert.equal(client.calls.draft.length, 0);
+  assert.deepEqual(
+    client.calls.shortDraft.map(({ shortName }) => shortName),
+    ['short_01_hook', 'short_02_lesson']
+  );
+  assert.deepEqual(report.created.map(({ variant }) => variant), ['short', 'short']);
+  const state = JSON.parse(await readFile(path.join(outputDirectory, 'state.json'), 'utf8'));
+  assert.deepEqual(
+    state.entries.map(({ variant, shortName }) => ({ variant, shortName })),
+    [
+      { variant: 'review', shortName: undefined },
+      { variant: 'short', shortName: 'short_01_hook' },
+      { variant: 'short', shortName: 'short_02_lesson' },
+    ]
+  );
+});
+
+test('skips one incomplete Short and continues other Shorts and books', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'book-draft-short-skip-'));
+  const outputDirectory = path.join(root, 'outputs');
+  const first = await createBook(root, 'BookOne', { review: false, image: false });
+  const second = await createBook(root, 'BookTwo');
+  await addShorts(first, [
+    { name: 'short_01_missing', video: false },
+    { name: 'short_02_ready' },
+  ]);
+  const client = createFakeClient();
+
+  const report = await runBookFacebookDraftBatch({
+    databasePath: path.join(root, 'unused.sqlite3'),
+    batchRoot: root,
+    outputDirectory,
+    pageName: PAGE_NAME,
+    limit: 2,
+    client,
+    discoverCandidates: async () => [first, second],
+    now: () => new Date('2026-09-13T12:00:00.000Z'),
+    retryDelayMs: 0,
+  });
+
+  assert.equal(
+    report.skipped.some(
+      ({ variant, shortName, reason }) =>
+        variant === 'short' && shortName === 'short_01_missing' && reason === 'video_missing'
+    ),
+    true
+  );
+  assert.deepEqual(
+    report.created.map(({ title, variant }) => `${title}:${variant}`),
+    ['BookOne:short', 'BookTwo:review']
+  );
+});
+
+test('records one Short failure and still creates later Shorts from the same book', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'book-draft-short-failure-'));
+  const outputDirectory = path.join(root, 'outputs');
+  const candidate = await createBook(root, 'BookOne', { review: false, image: false });
+  await addShorts(candidate, [
+    { name: 'short_01_broken' },
+    { name: 'short_02_ready' },
+  ]);
+  const failure = Object.assign(new Error('short draft failed'), {
+    code: 'short_draft_failed',
+    transient: false,
+  });
+  const client = createFakeClient({
+    shortDraftFailures: new Map([['short_01_broken', [failure]]]),
+  });
+
+  const report = await runBookFacebookDraftBatch({
+    databasePath: path.join(root, 'unused.sqlite3'),
+    batchRoot: root,
+    outputDirectory,
+    pageName: PAGE_NAME,
+    limit: 1,
+    client,
+    discoverCandidates: async () => [candidate],
+    now: () => new Date('2026-09-13T12:00:00.000Z'),
+    retryDelayMs: 0,
+  });
+
+  assert.equal(report.failed[0].shortName, 'short_01_broken');
+  assert.equal(report.failed[0].reason, 'short_draft_failed');
+  assert.equal(report.created[0].shortName, 'short_02_ready');
+  assert.equal(client.calls.shortDraft.length, 2);
 });

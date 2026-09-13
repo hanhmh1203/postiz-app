@@ -6,8 +6,10 @@ import { pathToFileURL } from 'node:url';
 
 import {
   classifyCandidate,
+  computeShortChecksum,
   computeSourceChecksum,
   discoverPortalCandidates,
+  discoverShortResources,
   loadState,
   parseBatchArgs,
   selectLatestReview,
@@ -17,6 +19,7 @@ import {
 import { PostizLocalClient, readPostizCredentials } from './postiz-local-client.mjs';
 
 export const TEMPLATE_VERSION = 'book-facebook-v1';
+export const SHORT_TEMPLATE_VERSION = 'book-facebook-short-v1';
 export const DEFAULT_PAGE_NAME = 'Vì cuộc sống là ko chờ đợi';
 const COMMENT_PREFIX = 'Để nghe review trọn vẹn, bạn xem tại đây: ';
 
@@ -42,7 +45,7 @@ function safeErrorCode(error) {
   return /^[a-z0-9_]+$/.test(code) ? code : 'unexpected_error';
 }
 
-async function validateResources(candidate) {
+async function validateReviewResources(candidate) {
   const reviewPath = await selectLatestReview(candidate.workflowDirectory);
   if (!reviewPath) return { reason: 'review_missing' };
   const imagePath = path.join(candidate.workflowDirectory, 'land.png');
@@ -57,16 +60,26 @@ async function validateResources(candidate) {
   return { reviewPath, imagePath, review };
 }
 
-async function writePreview({ outputDirectory, runId, candidate, caption, comment }) {
+async function writePreview({
+  outputDirectory,
+  runId,
+  candidate,
+  content,
+  comment,
+  mediaPath,
+  variant,
+  shortName,
+}) {
   const previewDirectory = path.join(outputDirectory, 'previews', runId);
   await mkdir(previewDirectory, { recursive: true });
   const safeName = candidate.bookId.replace(/[^A-Za-z0-9_-]+/g, '_');
-  const previewPath = path.join(previewDirectory, `${safeName}.md`);
+  const suffix = variant === 'short' ? `-short-${shortName}` : '-review';
+  const previewPath = path.join(previewDirectory, `${safeName}${suffix}.md`);
   const text = `# ${candidate.title}
 
-## Facebook draft
+## Facebook ${variant} draft
 
-${caption}
+${content}
 
 ## First comment
 
@@ -74,7 +87,7 @@ ${comment}
 
 ## Media
 
-${candidate.imagePath}
+${mediaPath}
 `;
   await writeFile(previewPath, text, { mode: 0o600 });
   return previewPath;
@@ -101,103 +114,266 @@ export async function runBookFacebookDraftBatch({
   const state = await loadState(statePath);
   const runId = now().toISOString().replace(/[:.]/g, '-');
   const report = { created: [], skipped: [], sourceChanged: [], failed: [] };
+  const createdBooks = new Set();
 
   await client.login();
   const integration = await client.preflight(pageName);
   const candidates = await discoverCandidates({ databasePath, batchRoot });
 
   for (const rawCandidate of candidates) {
-    if (report.created.length >= limit) break;
-    let candidate = rawCandidate;
+    if (createdBooks.size >= limit) break;
+    let bookCreated = false;
+
     try {
-      const resources = await validateResources(rawCandidate);
+      const resources = await validateReviewResources(rawCandidate);
       if (resources.reason) {
-        report.skipped.push({ ...rawCandidate, status: 'skipped', reason: resources.reason });
-        continue;
-      }
-      candidate = { ...rawCandidate, ...resources };
-      const checksum = await computeSourceChecksum(candidate, pageName, TEMPLATE_VERSION);
-      const classification = classifyCandidate(candidate, state, checksum);
-      if (classification === 'skipped') {
-        report.skipped.push({ ...candidate, checksum, status: 'skipped', reason: 'already_drafted' });
-        continue;
-      }
-      if (classification === 'source_changed') {
-        report.sourceChanged.push({ ...candidate, checksum, status: 'source_changed', reason: 'source_changed' });
-        continue;
-      }
-
-      const caption = await retryTransient(
-        () => client.generateCaption({ title: candidate.title, review: candidate.review }),
-        { retries: 2, delayMs: retryDelayMs }
-      );
-      const comment = `${COMMENT_PREFIX}${candidate.videoUrl}`;
-      const marker = `wrb:${candidate.bookId}:${checksum}`;
-
-      if (dryRun) {
-        const previewPath = await writePreview({ outputDirectory, runId, candidate, caption, comment });
-        report.created.push({
-          ...candidate,
-          checksum,
-          status: 'dry_run',
-          previewPath,
+        report.skipped.push({
+          ...rawCandidate,
+          variant: 'review',
+          status: 'skipped',
+          reason: resources.reason,
         });
-        continue;
-      }
+      } else {
+        const candidate = { ...rawCandidate, ...resources, variant: 'review' };
+        const checksum = await computeSourceChecksum(candidate, pageName, TEMPLATE_VERSION);
+        const classification = classifyCandidate(candidate, state, checksum, {
+          variant: 'review',
+        });
+        if (classification === 'skipped') {
+          report.skipped.push({
+            ...candidate,
+            checksum,
+            status: 'skipped',
+            reason: 'already_drafted',
+          });
+        } else if (classification === 'source_changed') {
+          report.sourceChanged.push({
+            ...candidate,
+            checksum,
+            status: 'source_changed',
+            reason: 'source_changed',
+          });
+        } else {
+          const caption = await retryTransient(
+            () => client.generateCaption({ title: candidate.title, review: candidate.review }),
+            { retries: 2, delayMs: retryDelayMs }
+          );
+          const comment = `${COMMENT_PREFIX}${candidate.videoUrl}`;
+          const marker = `wrb:${candidate.bookId}:${checksum}`;
 
-      const media = await retryTransient(() => client.uploadMedia(candidate.imagePath), {
-        retries: 2,
-        delayMs: retryDelayMs,
-      });
-      let draft;
-      try {
-        draft = await retryTransient(
-          () => client.createDraft({
-            integrationId: integration.id,
-            title: candidate.title,
-            caption,
-            comment,
-            media,
-            marker,
-          }),
-          { retries: 2, delayMs: retryDelayMs }
-        );
-      } catch (error) {
-        const existing = await client.findDraftByMarker(marker).catch(() => null);
-        if (!existing) throw error;
-        draft = existing;
+          if (dryRun) {
+            const previewPath = await writePreview({
+              outputDirectory,
+              runId,
+              candidate,
+              content: caption,
+              comment,
+              mediaPath: candidate.imagePath,
+              variant: 'review',
+            });
+            report.created.push({
+              ...candidate,
+              checksum,
+              status: 'dry_run',
+              previewPath,
+            });
+          } else {
+            const media = await retryTransient(() => client.uploadMedia(candidate.imagePath), {
+              retries: 2,
+              delayMs: retryDelayMs,
+            });
+            let draft;
+            try {
+              draft = await retryTransient(
+                () =>
+                  client.createDraft({
+                    integrationId: integration.id,
+                    title: candidate.title,
+                    caption,
+                    comment,
+                    media,
+                    marker,
+                  }),
+                { retries: 2, delayMs: retryDelayMs }
+              );
+            } catch (error) {
+              const existing = await client.findDraftByMarker(marker).catch(() => null);
+              if (!existing) throw error;
+              draft = existing;
+            }
+            state.entries.push({
+              variant: 'review',
+              bookId: candidate.bookId,
+              productionId: candidate.productionId,
+              checksum,
+              pageName,
+              postId: draft.postId,
+              commentId: draft.commentId,
+              reviewPath: candidate.reviewPath,
+              imagePath: candidate.imagePath,
+              videoUrl: candidate.videoUrl,
+              createdAt: now().toISOString(),
+              templateVersion: TEMPLATE_VERSION,
+            });
+            await writeState(statePath, state);
+            report.created.push({
+              ...candidate,
+              checksum,
+              status: 'created',
+              draftId: draft.postId,
+            });
+          }
+          bookCreated = true;
+        }
       }
-
-      const stateEntry = {
-        bookId: candidate.bookId,
-        productionId: candidate.productionId,
-        checksum,
-        pageName,
-        postId: draft.postId,
-        commentId: draft.commentId,
-        reviewPath: candidate.reviewPath,
-        imagePath: candidate.imagePath,
-        videoUrl: candidate.videoUrl,
-        createdAt: now().toISOString(),
-        templateVersion: TEMPLATE_VERSION,
-      };
-      state.entries.push(stateEntry);
-      await writeState(statePath, state);
-      report.created.push({
-        ...candidate,
-        checksum,
-        status: 'created',
-        draftId: draft.postId,
-      });
     } catch (error) {
       report.failed.push({
-        bookId: candidate.bookId,
-        productionId: candidate.productionId,
-        title: candidate.title,
+        bookId: rawCandidate.bookId,
+        productionId: rawCandidate.productionId,
+        title: rawCandidate.title,
+        variant: 'review',
         status: 'failed',
         reason: safeErrorCode(error),
       });
     }
+
+    let shorts;
+    try {
+      shorts = await discoverShortResources(rawCandidate.workflowDirectory);
+    } catch (error) {
+      report.failed.push({
+        ...rawCandidate,
+        variant: 'short',
+        status: 'failed',
+        reason: safeErrorCode(error),
+      });
+      shorts = [];
+    }
+
+    for (const short of shorts) {
+      const candidate = { ...rawCandidate, ...short, variant: 'short' };
+      if (short.status !== 'ready') {
+        report.skipped.push({
+          ...candidate,
+          status: 'skipped',
+          reason: short.status,
+        });
+        continue;
+      }
+      try {
+        const checksum = await computeShortChecksum(
+          rawCandidate,
+          short,
+          pageName,
+          SHORT_TEMPLATE_VERSION
+        );
+        const classification = classifyCandidate(rawCandidate, state, checksum, {
+          variant: 'short',
+          shortName: short.shortName,
+        });
+        if (classification === 'skipped') {
+          report.skipped.push({
+            ...candidate,
+            checksum,
+            status: 'skipped',
+            reason: 'already_drafted',
+          });
+          continue;
+        }
+        if (classification === 'source_changed') {
+          report.sourceChanged.push({
+            ...candidate,
+            checksum,
+            status: 'source_changed',
+            reason: 'source_changed',
+          });
+          continue;
+        }
+
+        const content = `${short.description}\n\n${short.hashtags}`.trim();
+        const comment = `${COMMENT_PREFIX}${rawCandidate.videoUrl}`;
+        const marker = `wrb:${rawCandidate.bookId}:short:${short.shortName}:${checksum}`;
+        if (dryRun) {
+          const previewPath = await writePreview({
+            outputDirectory,
+            runId,
+            candidate,
+            content,
+            comment,
+            mediaPath: short.videoPath,
+            variant: 'short',
+            shortName: short.shortName,
+          });
+          report.created.push({
+            ...candidate,
+            checksum,
+            status: 'dry_run',
+            previewPath,
+          });
+        } else {
+          const media = await retryTransient(() => client.uploadMedia(short.videoPath), {
+            retries: 2,
+            delayMs: retryDelayMs,
+          });
+          let draft;
+          try {
+            draft = await retryTransient(
+              () =>
+                client.createShortDraft({
+                  integrationId: integration.id,
+                  content,
+                  comment,
+                  media,
+                  marker,
+                  shortName: short.shortName,
+                }),
+              { retries: 2, delayMs: retryDelayMs }
+            );
+          } catch (error) {
+            const existing = await client.findDraftByMarker(marker).catch(() => null);
+            if (!existing) throw error;
+            draft = existing;
+          }
+          state.entries.push({
+            variant: 'short',
+            shortName: short.shortName,
+            shortNumber: short.shortNumber,
+            bookId: rawCandidate.bookId,
+            productionId: rawCandidate.productionId,
+            checksum,
+            pageName,
+            postId: draft.postId,
+            commentId: draft.commentId,
+            videoPath: short.videoPath,
+            metadataPath: short.metadataPath,
+            videoUrl: rawCandidate.videoUrl,
+            createdAt: now().toISOString(),
+            templateVersion: SHORT_TEMPLATE_VERSION,
+          });
+          await writeState(statePath, state);
+          report.created.push({
+            ...candidate,
+            checksum,
+            status: 'created',
+            draftId: draft.postId,
+          });
+        }
+        bookCreated = true;
+      } catch (error) {
+        report.failed.push({
+          bookId: rawCandidate.bookId,
+          productionId: rawCandidate.productionId,
+          title: rawCandidate.title,
+          variant: 'short',
+          shortName: short.shortName,
+          shortNumber: short.shortNumber,
+          status: 'failed',
+          reason: safeErrorCode(error),
+        });
+      }
+    }
+
+    if (bookCreated) createdBooks.add(rawCandidate.bookId);
   }
 
   if (!dryRun) await writeState(statePath, state);
