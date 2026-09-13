@@ -130,6 +130,58 @@ export class FacebookProvider extends SocialAbstract implements SocialProvider {
     }, identifier);
   }
 
+  private async uploadVideo(
+    pageId: string,
+    accessToken: string,
+    mediaPath: string,
+    description: string,
+    identifier: string
+  ): Promise<{ id: string; permalink_url?: string }> {
+    const url = `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${pageId}/videos?access_token=${accessToken}&fields=id,permalink_url`;
+    const localPath = this.localUploadPath(mediaPath);
+
+    if (!localPath) {
+      return (
+        await this.fetch(
+          url,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              file_url: mediaPath,
+              description,
+              published: true,
+            }),
+          },
+          identifier
+        )
+      ).json() as Promise<{ id: string; permalink_url?: string }>;
+    }
+
+    return this.runStreamedUpload(async () => {
+      const form = new FormDataUpload();
+      form.append('description', description);
+      form.append('published', 'true');
+      form.append(
+        'source',
+        await this.mediaStream(localPath, this.identifier),
+        {
+          filename: path.basename(localPath),
+          contentType: lookup(localPath) || 'video/mp4',
+          knownLength: await this.mediaSize(localPath, this.identifier),
+        }
+      );
+
+      const { data } = await this.getSsrfSafeAxios().post(url, form, {
+        headers: form.getHeaders(),
+        maxBodyLength: Infinity,
+      });
+      return data;
+    }, identifier);
+  }
+
   override async checkValidity(
     [firstPost]: Array<ValidityMedia[]>,
     settings: any
@@ -833,27 +885,13 @@ export class FacebookProvider extends SocialAbstract implements SocialProvider {
     let finalId = '';
     let finalUrl = '';
     if (hasExtension(firstPost?.media?.[0]?.path, 'mp4')) {
-      const {
-        id: videoId,
-        permalink_url,
-        ...all
-      } = await (
-        await this.fetch(
-          `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${id}/videos?access_token=${accessToken}&fields=id,permalink_url`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              file_url: firstPost?.media?.[0]?.path!,
-              description: firstPost.message,
-              published: true,
-            }),
-          },
-          'upload mp4'
-        )
-      ).json();
+      const { id: videoId } = await this.uploadVideo(
+        id,
+        accessToken,
+        firstPost.media[0].path,
+        firstPost.message,
+        'upload mp4'
+      );
 
       finalUrl = 'https://www.facebook.com/reel/' + videoId;
       finalId = videoId;
