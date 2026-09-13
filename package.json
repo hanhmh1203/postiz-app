@@ -37,7 +37,9 @@
     "docker-build": "./var/docker/docker-build.sh",
     "docker-create": "./var/docker/docker-create.sh",
     "postinstall": "pnpm run prisma-generate",
-    "test": "jest --coverage --detectOpenHandles --reporters=default --reporters=jest-junit"
+    "test": "jest --coverage --detectOpenHandles --reporters=default --reporters=jest-junit",
+    "test:book-facebook-drafts": "NODE_NO_WARNINGS=1 node --test scripts/local/book-facebook-drafts-lib.test.mjs scripts/local/postiz-local-client.test.mjs scripts/local/create-book-facebook-drafts.test.mjs",
+    "book-facebook-drafts": "bash scripts/local/create-book-facebook-drafts.sh"
   },
   "dependencies": {
     "@ag-ui/mastra": "^1.0.1",

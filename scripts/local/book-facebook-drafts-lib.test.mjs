@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, utimes, realpath } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp, mkdir, readFile, writeFile, utimes, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -212,4 +213,31 @@ test('loads missing state and atomically writes safe JSON and Markdown reports',
   });
   assert.match(paths.json, /2026-09-13T12-00-00-000Z\.json$/);
   assert.match(paths.markdown, /2026-09-13T12-00-00-000Z\.md$/);
+});
+
+test('ships one Bash wrapper that rejects relative batch paths', () => {
+  const wrapper = path.resolve('scripts/local/create-book-facebook-drafts.sh');
+  const result = spawnSync('bash', [wrapper, 'relative/books', '--dry-run'], {
+    cwd: path.resolve('.'),
+    encoding: 'utf8',
+    env: { ...process.env },
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /absolute/i);
+});
+
+test('documents non-secret batch settings and exposes package scripts', async () => {
+  const example = await readFile(path.resolve('.env.codex-local.example'), 'utf8');
+  for (const key of [
+    'POSTIZ_URL=',
+    'POSTIZ_CREDENTIAL_FILE=',
+    'POSTIZ_FACEBOOK_PAGE_NAME=',
+    'BOOK_LIBRARY_DATABASE=',
+    'BOOK_FACEBOOK_DRAFT_OUTPUT=',
+  ]) {
+    assert.match(example, new RegExp(`^${key}`, 'm'));
+  }
+  const packageJson = JSON.parse(await readFile(path.resolve('package.json'), 'utf8'));
+  assert.equal(typeof packageJson.scripts['test:book-facebook-drafts'], 'string');
+  assert.equal(typeof packageJson.scripts['book-facebook-drafts'], 'string');
 });
