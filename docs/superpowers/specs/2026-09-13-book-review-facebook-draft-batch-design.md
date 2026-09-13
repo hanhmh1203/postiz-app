@@ -1,7 +1,9 @@
 # Book Review Facebook Draft Batch Design
 
-**Date:** 2026-09-13  
-**Status:** Approved design, pending user review of the written specification  
+**Date:** 2026-09-13
+
+**Status:** Approved design, pending user review of the written specification
+
 **Target Facebook Page:** `Vì cuộc sống là ko chờ đợi`
 
 ## Purpose
