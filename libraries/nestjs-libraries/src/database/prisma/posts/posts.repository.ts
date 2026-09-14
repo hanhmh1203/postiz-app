@@ -16,6 +16,7 @@ import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
 import utc from 'dayjs/plugin/utc';
 import { v4 as uuidv4 } from 'uuid';
 import { CreateTagDto } from '@gitroom/nestjs-libraries/dtos/posts/create.tag.dto';
+import { buildPostsListQuery } from '@gitroom/nestjs-libraries/database/prisma/posts/posts.list.query';
 
 dayjs.extend(isoWeek);
 dayjs.extend(weekOfYear);
@@ -220,67 +221,18 @@ export class PostsRepository {
     const limit = query.limit || 20;
     const skip = page * limit;
 
-    const stateFilter = query.state || 'all';
-    const stateAndDate =
-      stateFilter === 'scheduled'
-        ? {
-            state: State.QUEUE,
-          }
-        : stateFilter === 'draft'
-        ? { state: State.DRAFT }
-        : stateFilter === 'published'
-        ? { state: State.PUBLISHED }
-        : {
-            state: {
-              in: [State.QUEUE, State.DRAFT, State.PUBLISHED, State.ERROR],
-            },
-          };
-
-    const orderDirection: 'asc' | 'desc' =
-      stateFilter === 'published' ? 'desc' : 'asc';
-
-    const where = {
-      AND: [
-        {
-          OR: [
-            {
-              organizationId: orgId,
-            },
-          ],
-        },
-      ],
-      ...stateAndDate,
-      // Published posts were already posted (publishDate in the past), so fetch
-      // all of them; everything else stays upcoming. Ordering handles the rest.
-      ...(stateFilter === 'published'
-        ? {}
-        : { publishDate: { gte: dayjs.utc().toDate() } }),
-      deletedAt: null as Date | null,
-      parentPostId: null as string | null,
-      intervalInDays: null as number | null,
-
-      integration: {
-        deletedAt: null as any,
-        organizationId: orgId,
-        ...(query.customer
-          ? {
-              customerId: query.customer,
-            }
-          : {}),
-      },
-    };
+    const { where, orderBy } = buildPostsListQuery(orgId, query);
 
     const [posts, total] = await Promise.all([
       this._post.model.post.findMany({
         where,
         skip,
         take: limit,
-        orderBy: {
-          publishDate: orderDirection,
-        },
+        orderBy,
         select: {
           id: true,
           content: true,
+          image: true,
           publishDate: true,
           releaseURL: true,
           releaseId: true,
