@@ -8,6 +8,7 @@ import {
   State,
 } from '@prisma/client';
 import { GetPostsDto } from '@gitroom/nestjs-libraries/dtos/posts/get.posts.dto';
+import { shouldIncludeCalendarPostMedia } from '@gitroom/nestjs-libraries/database/prisma/posts/posts.calendar.query';
 import { GetPostsListDto } from '@gitroom/nestjs-libraries/dtos/posts/get.posts.list.dto';
 import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
@@ -169,6 +170,7 @@ export class PostsRepository {
       select: {
         id: true,
         content: true,
+        image: shouldIncludeCalendarPostMedia(query.display),
         publishDate: true,
         releaseURL: true,
         releaseId: true,

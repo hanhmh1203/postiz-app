@@ -2,6 +2,7 @@ import {
   IsOptional,
   IsString,
   IsDateString,
+  IsIn,
 } from 'class-validator';
 
 export class GetPostsDto {
@@ -14,4 +15,8 @@ export class GetPostsDto {
   @IsOptional()
   @IsString()
   customer: string;
+
+  @IsOptional()
+  @IsIn(['day', 'week', 'month'])
+  display?: 'day' | 'week' | 'month';
 }
