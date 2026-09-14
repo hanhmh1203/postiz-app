@@ -62,7 +62,10 @@ import {
   ListViewItem,
   ListViewPost,
 } from '@gitroom/frontend/components/launches/list-view-item';
-import { buildDraftSchedulePayload } from '@gitroom/frontend/components/launches/list-view.utils';
+import {
+  buildDraftNowPayload,
+  buildDraftSchedulePayload,
+} from '@gitroom/frontend/components/launches/list-view.utils';
 
 // Extend dayjs with necessary plugins
 extend(isSameOrAfter);
@@ -258,6 +261,79 @@ const usePostActions = (onMutate?: () => void) => {
   );
 
   return { editPost, deletePost, copyDebugJson, openStatistics, openMissingRelease };
+};
+
+const useDraftRowActions = () => {
+  const t = useT();
+  const fetch = useFetch();
+  const toaster = useToaster();
+  const { reloadCalendarView } = useCalendar();
+
+  const submitDraft = useCallback(
+    async (
+      post: ListViewPost,
+      type: 'schedule' | 'now',
+      date: dayjs.Dayjs
+    ) => {
+      try {
+        const groupResponse = await fetch(`/posts/group/${post.group}`);
+        if (!groupResponse.ok) {
+          throw new Error('Could not load draft');
+        }
+
+        const group = await groupResponse.json();
+        const payload =
+          type === 'now'
+            ? buildDraftNowPayload(group, post.tags, date)
+            : buildDraftSchedulePayload(group, post.tags, date);
+        const response = await fetch('/posts', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+          throw new Error('Could not update draft');
+        }
+
+        toaster.show(
+          type === 'now'
+            ? t('draft_publishing_now', 'Draft is publishing now')
+            : t('draft_scheduled_successfully', 'Draft scheduled successfully'),
+          'success'
+        );
+        reloadCalendarView();
+        return true;
+      } catch {
+        toaster.show(
+          type === 'now'
+            ? t(
+                'draft_publish_now_failed',
+                'Could not publish this draft. Please retry.'
+              )
+            : t(
+                'draft_schedule_failed',
+                'Could not schedule this draft. Please retry.'
+              ),
+          'warning'
+        );
+        reloadCalendarView();
+        return false;
+      }
+    },
+    [fetch, reloadCalendarView, t, toaster]
+  );
+
+  const schedulePost = useCallback(
+    (post: ListViewPost, date: dayjs.Dayjs) =>
+      submitDraft(post, 'schedule', date),
+    [submitDraft]
+  );
+
+  const postNow = useCallback(
+    (post: ListViewPost) => submitDraft(post, 'now', newDayjs()),
+    [submitDraft]
+  );
+
+  return { schedulePost, postNow };
 };
 
 export const DayView = () => {
@@ -492,9 +568,7 @@ export const MonthView = () => {
 };
 export const ListView = () => {
   const t = useT();
-  const fetch = useFetch();
-  const toaster = useToaster();
-  const { loading, listPosts, listState, reloadCalendarView } = useCalendar();
+  const { loading, listPosts, listState } = useCalendar();
   const emptyMessage =
     listState === 'scheduled'
       ? t('no_upcoming_posts', 'No upcoming posts scheduled')
@@ -505,45 +579,7 @@ export const ListView = () => {
       : t('no_posts', 'No posts');
 
   const { editPost } = usePostActions();
-
-  const schedulePost = useCallback(
-    async (post: ListViewPost, date: dayjs.Dayjs) => {
-      try {
-        const groupResponse = await fetch(`/posts/group/${post.group}`);
-        if (!groupResponse.ok) {
-          throw new Error('Could not load draft');
-        }
-
-        const group = await groupResponse.json();
-        const payload = buildDraftSchedulePayload(group, post.tags, date);
-        const scheduleResponse = await fetch('/posts', {
-          method: 'POST',
-          body: JSON.stringify(payload),
-        });
-        if (!scheduleResponse.ok) {
-          throw new Error('Could not schedule draft');
-        }
-
-        toaster.show(
-          t('draft_scheduled_successfully', 'Draft scheduled successfully'),
-          'success'
-        );
-        reloadCalendarView();
-        return true;
-      } catch {
-        toaster.show(
-          t(
-            'draft_schedule_failed',
-            'Could not schedule this draft. Please retry.'
-          ),
-          'warning'
-        );
-        reloadCalendarView();
-        return false;
-      }
-    },
-    [fetch, reloadCalendarView, t, toaster]
-  );
+  const { schedulePost, postNow } = useDraftRowActions();
 
   if (loading) {
     return (
@@ -571,6 +607,7 @@ export const ListView = () => {
               post={post}
               editPost={editPost(post, false)}
               schedulePost={schedulePost}
+              postNow={postNow}
             />
           ))}
         </div>

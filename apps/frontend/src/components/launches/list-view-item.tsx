@@ -5,6 +5,7 @@ import type dayjs from 'dayjs';
 import { useMemo, useState } from 'react';
 
 import { newDayjs } from '@gitroom/frontend/components/layout/set.timezone';
+import { useModals } from '@gitroom/frontend/components/layout/new-modal';
 import { isUSCitizen } from '@gitroom/frontend/components/launches/helpers/isuscitizen.utils';
 import {
   isVideoPath,
@@ -23,12 +24,15 @@ export function ListViewItem({
   post,
   editPost,
   schedulePost,
+  postNow,
 }: {
   post: ListViewPost;
   editPost: () => void;
   schedulePost: (post: ListViewPost, date: dayjs.Dayjs) => Promise<boolean>;
+  postNow: (post: ListViewPost) => Promise<boolean>;
 }) {
   const t = useT();
+  const modal = useModals();
   const mediaDirectory = useMediaDirectory();
   const media = useMemo(() => parseListMedia(post.image)[0], [post.image]);
   const initialDate = useMemo(() => {
@@ -37,7 +41,9 @@ export function ListViewItem({
     return currentDate.isAfter(nextHour) ? currentDate : nextHour;
   }, [post.publishDate]);
   const [selectedDate, setSelectedDate] = useState(initialDate);
-  const [scheduling, setScheduling] = useState(false);
+  const [pendingAction, setPendingAction] = useState<
+    'schedule' | 'now' | null
+  >(null);
   const previewPost = () => {
     window.open(`/p/${post.id}?share=true`, '_blank');
   };
@@ -57,13 +63,62 @@ export function ListViewItem({
       : post.state;
 
   const schedule = async () => {
-    if (scheduling || !validScheduleDate) return;
-    setScheduling(true);
+    if (pendingAction || !validScheduleDate) return;
+    setPendingAction('schedule');
     try {
       await schedulePost(post, selectedDate);
     } finally {
-      setScheduling(false);
+      setPendingAction(null);
     }
+  };
+
+  const publishNow = async () => {
+    if (pendingAction) return;
+    setPendingAction('now');
+    try {
+      await postNow(post);
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  const confirmPostNow = () => {
+    if (pendingAction) return;
+    modal.openModal({
+      id: `post-now-${post.id}`,
+      title: t('post_now', 'Post now'),
+      size: '520px',
+      children: (close) => (
+        <div className="flex flex-col gap-[20px]">
+          <div className="text-[16px] leading-[24px]">
+            {t(
+              'post_now_confirmation',
+              'Publish this draft and its first comment immediately to'
+            )}{' '}
+            <strong>{post.integration.name}</strong>?
+          </div>
+          <div className="flex justify-end gap-[10px]">
+            <button
+              type="button"
+              className="h-[38px] rounded-[8px] border border-newTableBorder px-[16px] font-[600]"
+              onClick={close}
+            >
+              {t('cancel', 'Cancel')}
+            </button>
+            <button
+              type="button"
+              className="h-[38px] rounded-[8px] bg-btnPrimary px-[16px] font-[600] text-white"
+              onClick={async () => {
+                await close();
+                await publishNow();
+              }}
+            >
+              {t('confirm_post_now', 'Post now')}
+            </button>
+          </div>
+        </div>
+      ),
+    });
   };
 
   return (
@@ -149,7 +204,7 @@ export function ListViewItem({
       </div>
 
       <div
-        className="flex shrink-0 flex-col gap-[8px] md:min-w-[330px]"
+        className="flex shrink-0 flex-col gap-[8px] md:min-w-[460px]"
         onClick={(event) => event.stopPropagation()}
       >
         {post.state === 'DRAFT' && (
@@ -171,13 +226,23 @@ export function ListViewItem({
             />
             <button
               type="button"
-              disabled={!validScheduleDate || scheduling}
+              disabled={!validScheduleDate || pendingAction !== null}
               className="h-[38px] rounded-[8px] bg-btnPrimary px-[14px] text-[13px] font-[600] text-white disabled:cursor-not-allowed disabled:opacity-50"
               onClick={schedule}
             >
-              {scheduling
+              {pendingAction === 'schedule'
                 ? t('scheduling', 'Scheduling...')
                 : t('schedule', 'Schedule')}
+            </button>
+            <button
+              type="button"
+              disabled={pendingAction !== null}
+              className="h-[38px] whitespace-nowrap rounded-[8px] border border-btnPrimary px-[14px] text-[13px] font-[600] text-btnPrimary disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={confirmPostNow}
+            >
+              {pendingAction === 'now'
+                ? t('publishing', 'Publishing...')
+                : t('post_now', 'Post now')}
             </button>
           </div>
         )}
