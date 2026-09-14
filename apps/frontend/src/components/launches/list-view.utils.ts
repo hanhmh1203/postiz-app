@@ -1,4 +1,4 @@
-import type { Dayjs } from 'dayjs';
+import dayjs, { type Dayjs } from 'dayjs';
 
 export type ListMedia = {
   id?: string;
@@ -44,10 +44,11 @@ export function isVideoPath(mediaPath: string) {
   return /\.(mp4|mov|webm)(?:$|[?#])/i.test(mediaPath);
 }
 
-export function buildDraftSchedulePayload(
+function buildDraftActionPayload<T extends 'schedule' | 'now'>(
   group: PostGroup,
   tags: ListTag[],
-  date: Dayjs
+  date: Dayjs,
+  type: T
 ) {
   const root = group.posts?.[0];
   if (!root || root.state !== 'DRAFT') {
@@ -55,7 +56,7 @@ export function buildDraftSchedulePayload(
   }
 
   return {
-    type: 'schedule' as const,
+    type,
     shortLink: false,
     date: date.utc().toISOString(),
     tags: (tags || []).map(({ tag }) => ({
@@ -76,4 +77,36 @@ export function buildDraftSchedulePayload(
       },
     ],
   };
+}
+
+export function buildDraftSchedulePayload(
+  group: PostGroup,
+  tags: ListTag[],
+  date: Dayjs
+) {
+  return buildDraftActionPayload(group, tags, date, 'schedule');
+}
+
+export function buildDraftNowPayload(
+  group: PostGroup,
+  tags: ListTag[],
+  date: Dayjs
+) {
+  return buildDraftActionPayload(group, tags, date, 'now');
+}
+
+export function selectPostsForDay<T extends { publishDate: string | Date }>(
+  posts: T[],
+  selectedDate: Dayjs
+): T[] {
+  const selectedDay = selectedDate.format('YYYY-MM-DD');
+  return posts
+    .filter(
+      (post) => dayjs(post.publishDate).format('YYYY-MM-DD') === selectedDay
+    )
+    .slice()
+    .sort(
+      (left, right) =>
+        dayjs(left.publishDate).valueOf() - dayjs(right.publishDate).valueOf()
+    );
 }
