@@ -16,6 +16,7 @@ const POST_CALENDAR_KEYS: Record<string, string> = {
 const POST_ITEM_KEYS: Record<string, string> = {
   id: 'i',
   content: 'c',
+  image: 'im',
   publishDate: 'd',
   releaseURL: 'u',
   releaseId: 'ri',
