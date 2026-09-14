@@ -61,4 +61,11 @@ Running the same batch again skips every current state entry. If source material
 
 Open `http://localhost:4007`, sign in, and open the Calendar or Posts area. Filter for the Facebook Page `Vì cuộc sống là ko chờ đợi` and status **Draft**. Each idea appears as a separate image post with its YouTube link in the first comment. You can edit, publish now, or schedule each draft from Postiz.
 
+For the quickest review workflow, switch the Calendar display to **List** and select **Draft**:
+
+- The newest drafts appear first, including drafts whose original placeholder date has already passed.
+- Image drafts show their book image. Video Short drafts show a paused video thumbnail with a play badge.
+- **Preview** opens the complete Postiz preview and **Edit** opens the full editor.
+- To schedule a draft, choose a future local date and time in its row, then press **Schedule**. Changing the date field alone does not update or schedule the draft.
+
 Run reports and dry-run previews are stored below `<BOOK_FACEBOOK_DRAFT_OUTPUT>/runs/` and `<BOOK_FACEBOOK_DRAFT_OUTPUT>/previews/`.
