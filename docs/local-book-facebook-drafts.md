@@ -31,6 +31,8 @@ The image variants require:
 
 The batch selects the newest recognized consolidated review file. Topic files such as `output/deep_analysis_01.md` and configuration files such as `review_profile.md` are not used as the Facebook source.
 
+When a consolidated review is larger than the generator transport budget, the batch automatically reduces the prompt source to at most 40 KiB of UTF-8 text. It preserves the document opening, every top-level `##` section, and the ending by sampling the beginning and end of each section. The original review file and its checksum remain unchanged. This keeps the complete generator request below the Codex bridge's 64 KiB body limit without weakening that bridge limit.
+
 Short video drafts additionally use `shorts.txt`, `youtube_metadata_short.md`, and the matching MP4 files under `output/shorts/`.
 
 ## Generated idea set

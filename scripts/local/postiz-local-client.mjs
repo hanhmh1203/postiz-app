@@ -3,6 +3,82 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const COMMENT_PREFIX = 'Để nghe review trọn vẹn, bạn xem tại đây: ';
+export const MAX_REVIEW_SOURCE_BYTES = 40 * 1024;
+const REVIEW_OMISSION_MARKER = '\n\n[… phần giữa được rút gọn …]\n\n';
+
+function utf8Bytes(value) {
+  return Buffer.byteLength(value, 'utf8');
+}
+
+function sliceUtf8(value, maxBytes, fromEnd = false) {
+  if (maxBytes <= 0) return '';
+  const characters = Array.from(value);
+  let low = 0;
+  let high = characters.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    const candidate = fromEnd
+      ? characters.slice(-middle).join('')
+      : characters.slice(0, middle).join('');
+    if (utf8Bytes(candidate) <= maxBytes) low = middle;
+    else high = middle - 1;
+  }
+  return fromEnd
+    ? characters.slice(-low).join('')
+    : characters.slice(0, low).join('');
+}
+
+function clipReviewSection(section, maxBytes) {
+  const normalized = section.trim();
+  if (utf8Bytes(normalized) <= maxBytes) return normalized;
+  const markerBytes = utf8Bytes(REVIEW_OMISSION_MARKER);
+  if (maxBytes <= markerBytes) return sliceUtf8(normalized, maxBytes);
+  const contentBytes = maxBytes - markerBytes;
+  const headBytes = Math.ceil(contentBytes / 2);
+  const tailBytes = contentBytes - headBytes;
+  return `${sliceUtf8(
+    normalized,
+    headBytes
+  )}${REVIEW_OMISSION_MARKER}${sliceUtf8(normalized, tailBytes, true)}`;
+}
+
+function markdownReviewSections(review) {
+  const headings = [...review.matchAll(/^##\s+.+$/gm)];
+  if (headings.length === 0) return [review];
+  const sections = [];
+  if (headings[0].index > 0) sections.push(review.slice(0, headings[0].index));
+  for (let index = 0; index < headings.length; index += 1) {
+    sections.push(
+      review.slice(
+        headings[index].index,
+        headings[index + 1]?.index ?? review.length
+      )
+    );
+  }
+  return sections.filter((section) => section.trim());
+}
+
+export function compactReviewForPrompt(
+  review,
+  maxBytes = MAX_REVIEW_SOURCE_BYTES
+) {
+  const normalized = String(review ?? '').trim();
+  if (utf8Bytes(normalized) <= maxBytes) return normalized;
+
+  const sections = markdownReviewSections(normalized);
+  const separator = '\n\n';
+  const availableBytes =
+    maxBytes - utf8Bytes(separator) * Math.max(0, sections.length - 1);
+  const baseBudget = Math.floor(availableBytes / sections.length);
+  let remainder = availableBytes % sections.length;
+  return sections
+    .map((section) => {
+      const budget = baseBudget + (remainder > 0 ? 1 : 0);
+      remainder -= remainder > 0 ? 1 : 0;
+      return clipReviewSection(section, budget);
+    })
+    .join(separator);
+}
 
 export class PostizClientError extends Error {
   constructor(
@@ -55,6 +131,7 @@ export function deterministicPostIds(marker) {
 }
 
 export function buildFacebookResearchBrief({ title, review }) {
+  const promptReview = compactReviewForPrompt(review);
   return `Viết một bài review Facebook bằng tiếng Việt cho cuốn sách “${title}”.
 
 Yêu cầu bắt buộc:
@@ -66,11 +143,12 @@ Yêu cầu bắt buộc:
 - Dùng 3-5 hashtag phù hợp và bắt buộc có #WillReadBook.
 - Viết tự nhiên, rõ ràng, tránh giọng quảng cáo chung chung.
 
-Review nguồn:
-${review}`;
+Review nguồn (tài liệu dài có thể đã được trích chọn theo cấu trúc; chỉ dùng dữ kiện hiện diện bên dưới):
+${promptReview}`;
 }
 
 export function buildFacebookIdeaBatchBrief({ title, review }) {
+  const promptReview = compactReviewForPrompt(review);
   return `Từ review nguồn, viết chính xác 10 bài Facebook độc lập bằng tiếng Việt cho cuốn sách “${title}”.
 
 Yêu cầu bắt buộc cho từng phần tử content:
@@ -84,8 +162,8 @@ Yêu cầu bắt buộc cho từng phần tử content:
 
 Mười bài phải khác nhau rõ ràng về góc tiếp cận. Trả về chính xác 10 phần tử content. Top-level hook chỉ là metadata và sẽ bị bỏ qua.
 
-Review nguồn:
-${review}`;
+Review nguồn (tài liệu dài có thể đã được trích chọn theo cấu trúc; chỉ dùng dữ kiện hiện diện bên dưới):
+${promptReview}`;
 }
 
 export function validateFacebookCaption(caption) {

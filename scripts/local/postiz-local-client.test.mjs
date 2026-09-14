@@ -76,6 +76,22 @@ function validIdeaGeneratedOutput(count = 10) {
   };
 }
 
+function longStructuredDocumentary() {
+  const sectionBody =
+    'Đây là nội dung phân tích chi tiết có dấu tiếng Việt, ví dụ cụ thể và lập luận từ sách. '.repeat(
+      160
+    );
+  return [
+    '# Review đầy đủ',
+    `Phần mở đầu đặt bối cảnh. ${sectionBody}`,
+    ...Array.from(
+      { length: 9 },
+      (_, index) => `## Chương ${index + 1}\n${sectionBody}`
+    ),
+    `## Kết luận\n${sectionBody}`,
+  ].join('\n\n');
+}
+
 test('reads local Postiz credentials without accepting an incomplete file', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'postiz-credentials-'));
   const validPath = path.join(directory, 'credentials');
@@ -728,4 +744,44 @@ test('builds an exact ten-item idea brief grounded in the source review', () => 
   assert.match(brief, /Nội dung phân tích nguồn/);
   assert.match(brief, /#WillReadBook/);
   assert.doesNotMatch(brief, /youtu/);
+});
+
+test('keeps long structured review requests below the Codex bridge body limit', () => {
+  const review = longStructuredDocumentary();
+  assert.ok(Buffer.byteLength(review, 'utf8') > 65_536);
+
+  const requests = [
+    {
+      research: buildFacebookResearchBrief({
+        title: 'Sách có documentary dài',
+        review,
+      }),
+      format: 'one_long',
+      tone: 'personal',
+      isPicture: false,
+    },
+    {
+      research: buildFacebookIdeaBatchBrief({
+        title: 'Sách có documentary dài',
+        review,
+      }),
+      format: 'thread_long',
+      tone: 'personal',
+      isPicture: false,
+    },
+  ];
+
+  for (const request of requests) {
+    const body = JSON.stringify(request);
+    assert.ok(
+      Buffer.byteLength(body, 'utf8') < 65_536,
+      'serialized request must fit below the Codex bridge 64 KiB limit'
+    );
+    assert.match(request.research, /# Review đầy đủ/);
+    assert.match(request.research, /## Chương 1/);
+    assert.match(request.research, /## Chương 9/);
+    assert.match(request.research, /## Kết luận/);
+    assert.match(request.research, /phần giữa được rút gọn/i);
+    assert.doesNotMatch(request.research, /�/);
+  }
 });
