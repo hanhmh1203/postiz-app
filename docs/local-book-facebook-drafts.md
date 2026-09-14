@@ -24,9 +24,12 @@ The image variants require:
 
 ```text
 <book-directory>/
-  *-phan-tich.md
   land.png
+  *-phan-tich.md
+  # or output/documentary.md for the newer book workflow
 ```
+
+The batch selects the newest recognized consolidated review file. Topic files such as `output/deep_analysis_01.md` and configuration files such as `review_profile.md` are not used as the Facebook source.
 
 Short video drafts additionally use `shorts.txt`, `youtube_metadata_short.md`, and the matching MP4 files under `output/shorts/`.
 

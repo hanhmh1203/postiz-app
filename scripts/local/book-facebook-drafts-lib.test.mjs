@@ -149,6 +149,23 @@ test('selects the newest analysis Markdown and ignores profile and metadata file
   assert.equal(await selectLatestReview(directory), newer);
 });
 
+test('selects the consolidated documentary when the workflow has no phan-tich file', async () => {
+  const directory = await makeTempDirectory();
+  const outputDirectory = path.join(directory, 'output');
+  await mkdir(outputDirectory);
+  const documentary = path.join(outputDirectory, 'documentary.md');
+  const deepAnalysis = path.join(outputDirectory, 'deep_analysis_01.md');
+  await writeFile(documentary, '# Final consolidated book review');
+  await writeFile(deepAnalysis, '# One topic analysis');
+  await writeFile(
+    path.join(directory, 'review_profile.md'),
+    '# Review profile'
+  );
+  await utimes(deepAnalysis, new Date('2026-03-01'), new Date('2026-03-01'));
+
+  assert.equal(await selectLatestReview(directory), documentary);
+});
+
 test('discovers every optional Short and isolates missing video or metadata', async () => {
   const directory = await makeTempDirectory();
   await writeFile(

@@ -142,12 +142,21 @@ function remapWorkflowDirectory(row, directoriesBySlug) {
 export async function selectLatestReview(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const candidates = [];
+  const addCandidate = async (filePath) => {
+    try {
+      const metadata = await stat(filePath);
+      if (!metadata.isFile() || metadata.size === 0) return;
+      candidates.push({ filePath, modifiedAt: metadata.mtimeMs });
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  };
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith('-phan-tich.md')) continue;
-    const filePath = path.join(directory, entry.name);
-    const metadata = await stat(filePath);
-    if (metadata.size === 0) continue;
-    candidates.push({ filePath, modifiedAt: metadata.mtimeMs });
+    await addCandidate(path.join(directory, entry.name));
+  }
+  for (const relativePath of ['documentary.md', 'output/documentary.md']) {
+    await addCandidate(path.join(directory, relativePath));
   }
   candidates.sort(
     (left, right) =>
