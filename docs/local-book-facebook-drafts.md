@@ -67,5 +67,7 @@ For the quickest review workflow, switch the Calendar display to **List** and se
 - Image drafts show their book image. Video Short drafts show a paused video thumbnail with a play badge.
 - **Preview** opens the complete Postiz preview and **Edit** opens the full editor.
 - To schedule a draft, choose a future local date and time in its row, then press **Schedule**. Changing the date field alone does not update or schedule the draft.
+- **Post now** opens a confirmation before publishing the draft and its first YouTube-link comment immediately.
+- **Day** mode uses the same detailed rows for posts on the selected date. Use **Week** or **Month** when you want the compact calendar overview.
 
 Run reports and dry-run previews are stored below `<BOOK_FACEBOOK_DRAFT_OUTPUT>/runs/` and `<BOOK_FACEBOOK_DRAFT_OUTPUT>/previews/`.

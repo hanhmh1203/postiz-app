@@ -41,7 +41,7 @@ import { useToaster } from '@gitroom/react/toaster/toaster';
 import { useUser } from '@gitroom/frontend/components/layout/user.context';
 import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
-import { groupBy, random, sortBy } from 'lodash';
+import { random } from 'lodash';
 import SafeImage from '@gitroom/react/helpers/safe.image';
 import { extend } from 'dayjs';
 import { isUSCitizen } from './helpers/isuscitizen.utils';
@@ -65,6 +65,7 @@ import {
 import {
   buildDraftNowPayload,
   buildDraftSchedulePayload,
+  selectPostsForDay,
 } from '@gitroom/frontend/components/launches/list-view.utils';
 
 // Extend dayjs with necessary plugins
@@ -337,82 +338,54 @@ const useDraftRowActions = () => {
 };
 
 export const DayView = () => {
-  const calendar = useCalendar();
-  const { integrations, posts, startDate } = calendar;
+  const t = useT();
+  const { loading, posts, startDate } = useCalendar();
+  const { editPost } = usePostActions();
+  const { schedulePost, postNow } = useDraftRowActions();
 
   // Set dayjs locale based on current language
   const currentLanguage = i18next.resolvedLanguage || 'en';
   dayjs.locale(currentLanguage);
 
-  const currentDay = dayjs.utc(startDate);
+  const currentDay = newDayjs(startDate);
+  const dayPosts = useMemo(
+    () => selectPostsForDay(posts, currentDay),
+    [posts, startDate]
+  );
 
-  const options = useMemo(() => {
-    const createdPosts = posts.map((post) => ({
-      integration: [integrations.find((i) => i.id === post.integration.id)!],
-      image: post?.integration?.picture || '',
-      identifier: post?.integration?.providerIdentifier || '',
-      id: post?.integration?.id || '',
-      name: post?.integration?.name || '',
-      time: dayjs
-        .utc(post.publishDate)
-        .diff(dayjs.utc(post.publishDate).startOf('day'), 'minute'),
-    }));
-    return sortBy(
-      Object.values(
-        groupBy(
-          [
-            ...createdPosts,
-            ...integrations.flatMap((p) =>
-              p.time.flatMap((t) => ({
-                integration: p,
-                identifier: p?.identifier,
-                name: p?.name,
-                id: p?.id,
-                image: p?.picture,
-                time: t?.time,
-              }))
-            ),
-          ],
-          (p: any) => p.time
-        )
-      ),
-      (p) => p[0].time
+  if (loading) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-textColor">
+        {t('loading', 'Loading...')}
+      </div>
     );
-  }, [integrations, posts]);
+  }
 
   return (
     <div className="flex flex-col gap-[10px] flex-1 relative">
       <div className="absolute start-0 top-0 w-full h-full flex flex-col overflow-auto scrollbar scrollbar-thumb-fifth scrollbar-track-newBgColor">
-        {options.map((option) => (
-          <Fragment key={option[0].time}>
-            <div className="text-center text-[14px] min-h-[21px]">
-              {newDayjs()
-                .utc()
-                .startOf('day')
-                .add(option[0].time, 'minute')
-                .local()
-                .format(isUSCitizen() ? 'hh:mm A' : 'LT')}
-            </div>
-            <div
-              key={option[0].time}
-              className="min-h-[60px] rounded-[10px] flex justify-center items-center gap-[10px] mb-[20px]"
-            >
-              <CalendarContext.Provider
-                value={{
-                  ...calendar,
-                  integrations: option.flatMap((p) => p.integration),
-                }}
-              >
-                <CalendarColumn
-                  getDate={currentDay
-                    .startOf('day')
-                    .add(option[0].time, 'minute')
-                    .local()}
-                />
-              </CalendarContext.Provider>
-            </div>
-          </Fragment>
-        ))}
+        <div className="sticky top-0 z-20 bg-newBgColor py-[10px] text-center text-[14px] font-[600] text-textColor">
+          {currentDay.format(
+            isUSCitizen() ? 'dddd, MMMM D, YYYY' : 'dddd, D MMMM YYYY'
+          )}
+        </div>
+        {dayPosts.length === 0 ? (
+          <div className="flex flex-1 items-center justify-center text-[16px] text-textColor">
+            {t('no_posts_on_this_day', 'No posts on this day')}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-[10px] px-[10px] pb-[10px]">
+            {dayPosts.map((post) => (
+              <ListViewItem
+                key={post.id}
+                post={post}
+                editPost={editPost(post, false)}
+                schedulePost={schedulePost}
+                postNow={postNow}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
