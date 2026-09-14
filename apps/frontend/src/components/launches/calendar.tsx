@@ -58,6 +58,11 @@ import copy from 'copy-to-clipboard';
 import { stripHtmlValidation } from '@gitroom/helpers/utils/strip.html.validation';
 import { newDayjs } from '@gitroom/frontend/components/layout/set.timezone';
 import { Button } from '@gitroom/react/form/button';
+import {
+  ListViewItem,
+  ListViewPost,
+} from '@gitroom/frontend/components/launches/list-view-item';
+import { buildDraftSchedulePayload } from '@gitroom/frontend/components/launches/list-view.utils';
 
 // Extend dayjs with necessary plugins
 extend(isSameOrAfter);
@@ -487,8 +492,9 @@ export const MonthView = () => {
 };
 export const ListView = () => {
   const t = useT();
-  const user = useUser();
-  const { integrations, loading, listPosts, listState } = useCalendar();
+  const fetch = useFetch();
+  const toaster = useToaster();
+  const { loading, listPosts, listState, reloadCalendarView } = useCalendar();
   const emptyMessage =
     listState === 'scheduled'
       ? t('no_upcoming_posts', 'No upcoming posts scheduled')
@@ -498,21 +504,46 @@ export const ListView = () => {
       ? t('no_published_posts', 'No published posts')
       : t('no_posts', 'No posts');
 
-  // Use shared post actions hook
-  const { editPost, deletePost, copyDebugJson, openStatistics, openMissingRelease } = usePostActions();
+  const { editPost } = usePostActions();
 
-  // Group posts by date
-  const groupedPosts = useMemo(() => {
-    const groups: { [key: string]: any[] } = {};
-    listPosts.forEach((post) => {
-      const dateKey = newDayjs(post.publishDate).local().format('YYYY-MM-DD');
-      if (!groups[dateKey]) {
-        groups[dateKey] = [];
+  const schedulePost = useCallback(
+    async (post: ListViewPost, date: dayjs.Dayjs) => {
+      try {
+        const groupResponse = await fetch(`/posts/group/${post.group}`);
+        if (!groupResponse.ok) {
+          throw new Error('Could not load draft');
+        }
+
+        const group = await groupResponse.json();
+        const payload = buildDraftSchedulePayload(group, post.tags, date);
+        const scheduleResponse = await fetch('/posts', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        if (!scheduleResponse.ok) {
+          throw new Error('Could not schedule draft');
+        }
+
+        toaster.show(
+          t('draft_scheduled_successfully', 'Draft scheduled successfully'),
+          'success'
+        );
+        reloadCalendarView();
+        return true;
+      } catch {
+        toaster.show(
+          t(
+            'draft_schedule_failed',
+            'Could not schedule this draft. Please retry.'
+          ),
+          'warning'
+        );
+        reloadCalendarView();
+        return false;
       }
-      groups[dateKey].push(post);
-    });
-    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
-  }, [listPosts]);
+    },
+    [fetch, reloadCalendarView, t, toaster]
+  );
 
   if (loading) {
     return (
@@ -533,33 +564,16 @@ export const ListView = () => {
   return (
     <div className="flex flex-col gap-[10px] flex-1 relative">
       <div className="absolute start-0 top-0 w-full h-full flex flex-col overflow-auto scrollbar scrollbar-thumb-fifth scrollbar-track-newBgColor">
-        {groupedPosts.map(([dateKey, datePosts]) => (
-          <Fragment key={dateKey}>
-            <div className="text-center text-[14px] min-h-[21px] text-textColor font-[500] mt-[10px]">
-              {newDayjs(dateKey).format(isUSCitizen() ? 'dddd, MMMM D, YYYY' : 'dddd, D MMMM YYYY')}
-            </div>
-            <div className="flex flex-col gap-[10px] mb-[20px] px-[10px]">
-              {datePosts.map((post) => (
-                <CalendarItem
-                  key={post.id}
-                  display="day"
-                  isBeforeNow={false}
-                  date={newDayjs(post.publishDate)}
-                  state={post.state}
-                  statistics={openStatistics(post.id)}
-                  missingRelease={openMissingRelease(post.id)}
-                  editPost={editPost(post, false)}
-                  duplicatePost={editPost(post, true)}
-                  copyDebugJson={user?.isSuperAdmin ? copyDebugJson(post) : undefined}
-                  post={post}
-                  integrations={integrations}
-                  deletePost={deletePost(post)}
-                  showTime={true}
-                />
-              ))}
-            </div>
-          </Fragment>
-        ))}
+        <div className="flex flex-col gap-[10px] px-[10px] py-[10px]">
+          {listPosts.map((post) => (
+            <ListViewItem
+              key={post.id}
+              post={post}
+              editPost={editPost(post, false)}
+              schedulePost={schedulePost}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );
